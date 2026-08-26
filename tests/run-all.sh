@@ -7,6 +7,7 @@ for pair in \
     "ak_core:ActivityKeeper.spoon/init.lua" \
     "ak_filet:ActivityKeeper.spoon/init.lua" \
     "ak_toast:ActivityKeeper.spoon/init.lua" \
+    "ak_robustesse:ActivityKeeper.spoon/init.lua" \
     "lwq_windows:LastWindowQuits.spoon/init.lua" \
     "lwq_securite:LastWindowQuits.spoon/init.lua" \
     "lwq_config:LastWindowQuits.spoon/init.lua" \

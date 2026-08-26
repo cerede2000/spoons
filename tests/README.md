@@ -14,6 +14,7 @@ lua tests/lwq_config.lua LastWindowQuits.spoon/init.lua   # une seule suite
 | `ak_core`        | ActivityKeeper  | chemins d'événement, taps système, commandes shell, rétroéclairage, luminosité écran |
 | `ak_filet`       | ActivityKeeper  | consignation et reprise de l'état système, hook d'arrêt |
 | `ak_toast`       | ActivityKeeper  | bulle de notification : ancrage, thème, cycle de vie |
+| `ak_robustesse`  | ActivityKeeper  | touche Maj relâchée, verrou de keepalive, test manuel, idle illisible |
 | `lwq_windows`    | LastWindowQuits | comptage des fenêtres, réduction, `windowRejected`, coût du scan |
 | `lwq_securite`   | LastWindowQuits | veille et verrouillage, arrêt du Spoon, application terminée |
 | `lwq_config`     | LastWindowQuits | autorité de `init.lua`, menu sans icône, raccourcis |

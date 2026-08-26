@@ -11,7 +11,7 @@ function M.install(opts)
         idle = 0,
         kbSequence = { 0.0 }, kbIndex = 0,
         axCalls = 0, axMode = "ok", killed = {}, deadCalls = {},
-        runningApps = {}, powerFn = nil, windowFilterEvents = {},
+        runningApps = {}, powerFn = nil, windowFilterEvents = {}, keyEvents = {},
     }
 
     local function screenObj(t)
@@ -44,7 +44,15 @@ function M.install(opts)
                         t.start=function() t.running=true end
                         t.stop=function() t.running=false end
                         return t end,
-                     event = { types = setmetatable({}, {__index=function(_,k) return k end}) } },
+                     event = {
+                        types = setmetatable({}, {__index=function(_,k) return k end}),
+                        newKeyEvent = function(mods, key, isDown)
+                            return { post = function()
+                                table.insert(ctl.keyEvents, { key = key, down = isDown })
+                            end }
+                        end,
+                        newMouseEvent = function() return { post = function() end } end,
+                     } },
         screen = { mainScreen=function() return screenObj(ctl.screens[1]) end,
                    allScreens=function()
                        local r={} for _,t in ipairs(ctl.screens) do r[#r+1]=screenObj(t) end return r end },
@@ -84,7 +92,7 @@ function M.install(opts)
         mouse = { absolutePosition=function() return {x=400,y=300} end },
         notify = { new=function() return { send=function() end } end },
         alert = { show=function(m) table.insert(ctl.printed, "ALERT:" .. tostring(m)) end },
-        caffeinate = { set=function() end,
+        caffeinate = { set=function() end, declareUserActivity=function() return 1 end,
                        watcher = setmetatable({ new=function(fn) ctl.powerFn = fn
                                        return {start=function() end, stop=function() end} end },
                                               { __index=function(_,k) return k end }) },

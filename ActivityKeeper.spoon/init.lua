@@ -2,7 +2,7 @@
 --
 -- ActivityKeeper Spoon
 --
--- Version : 4.11.0
+-- Version : 4.12.0
 --
 ------------------------------------------------------------
 --
@@ -146,7 +146,7 @@ obj.__index = obj
 
 obj.name = "ActivityKeeper"
 
-obj.version = "4.11.0"
+obj.version = "4.12.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -398,6 +398,10 @@ obj.checkTimer =
 
 obj.returnMouseTimer =
     nil
+
+
+obj.activityKeyDown =
+    false
 
 
 obj.keyUpTimer =
@@ -1279,6 +1283,10 @@ function obj:getIdleTime()
         )
 
 
+    -- Renvoyer 0 signifierait "l'utilisateur vient d'agir", ce qui
+    -- ferait sortir du mode vert et restaurer les economies d'energie
+    -- sur une simple erreur de lecture. nil laisse l'appelant decider.
+
     if not success then
 
         self:log(
@@ -1286,12 +1294,12 @@ function obj:getIdleTime()
         )
 
 
-        return 0
+        return nil
 
     end
 
 
-    return result or 0
+    return result
 
 end
 
@@ -2010,6 +2018,86 @@ end
 -- TOUCHE SYNTHÉTIQUE
 ------------------------------------------------------------
 
+-- Relache la touche d'activite si elle est encore enfoncee.
+--
+-- postActivityKey envoie un appui puis programme le relachement 50 ms
+-- plus tard. Si ce minuteur est annule sans etre joue -- desactivation
+-- du Spoon, arret, rechargement de Hammerspoon -- la touche reste
+-- logiquement enfoncee pour tout le systeme. Avec Maj, tout ce que
+-- l'utilisateur tape passe en majuscules jusqu'a ce qu'il appuie
+-- lui-meme dessus.
+
+function obj:releaseActivityKey()
+
+    if self.keyUpTimer then
+
+        self.keyUpTimer:stop()
+
+
+        self.keyUpTimer =
+            nil
+
+    end
+
+
+    if not self.activityKeyDown then
+
+        return false
+
+    end
+
+
+    self.activityKeyDown =
+        false
+
+
+    local success,
+          errorMessage =
+
+        pcall(
+
+            function()
+
+                hs.eventtap.event.newKeyEvent(
+
+                    {},
+
+                    self.activityKey,
+
+                    false
+
+                ):post()
+
+            end
+
+        )
+
+
+    if not success then
+
+        self:log(
+
+            "ERREUR relâchement "
+            ..
+            tostring(self.activityKey)
+            ..
+            " : "
+            ..
+            tostring(errorMessage)
+
+        )
+
+
+        return false
+
+    end
+
+
+    return true
+
+end
+
+
 function obj:postActivityKey()
 
     self:openSyntheticEventWindow()
@@ -2037,6 +2125,10 @@ function obj:postActivityKey()
                 ):post()
 
 
+                self.activityKeyDown =
+                    true
+
+
                 ------------------------------------------------
                 -- UP différé
                 ------------------------------------------------
@@ -2049,15 +2141,7 @@ function obj:postActivityKey()
 
                         function()
 
-                            hs.eventtap.event.newKeyEvent(
-
-                                {},
-
-                                self.activityKey,
-
-                                false
-
-                            ):post()
+                            self:releaseActivityKey()
 
                         end
 
@@ -4718,6 +4802,9 @@ function obj:installShutdownGuard()
             pcall(
                 function()
 
+                    obj:releaseActivityKey()
+
+
                     obj:restoreEnergySavingState()
 
 
@@ -4861,32 +4948,58 @@ function obj:sendKeepAlive()
 
 
     --------------------------------------------------------
-    -- USER ACTIVITY
+    -- Le verrou doit etre relache quoi qu'il arrive.
+    --
+    -- Sans cette protection, une seule erreur dans un des moteurs ou
+    -- dans la journalisation laissait keepAliveInProgress a true pour
+    -- toujours : tous les keepalives suivants ressortaient aussitot,
+    -- et le Spoon cessait silencieusement de faire son travail.
     --------------------------------------------------------
 
-    local userSuccess =
-        self:sendUserActivity()
+    local userSuccess,
+          keyboardSuccess,
+          mouseSuccess
 
 
-    --------------------------------------------------------
-    -- Touche clavier
-    --------------------------------------------------------
+    local ok,
+          errorMessage =
 
-    local keyboardSuccess =
-        self:sendKeyboardActivity()
+        pcall(
 
+            function()
 
-    --------------------------------------------------------
-    -- SOURIS
-    --------------------------------------------------------
-
-    local mouseSuccess =
-        self:sendMouseActivity()
+                userSuccess =
+                    self:sendUserActivity()
 
 
-    if keyboardSuccess then
+                keyboardSuccess =
+                    self:sendKeyboardActivity()
 
-        self:scheduleKeyboardBacklightEnforce()
+
+                mouseSuccess =
+                    self:sendMouseActivity()
+
+
+                if keyboardSuccess then
+
+                    self:scheduleKeyboardBacklightEnforce()
+
+                end
+
+            end
+
+        )
+
+
+    if not ok then
+
+        self:log(
+
+            "ERREUR keepalive : "
+            ..
+            tostring(errorMessage)
+
+        )
 
     end
 
@@ -5046,6 +5159,18 @@ function obj:checkIdleState()
 
     local idle =
         self:getIdleTime()
+
+
+    if idle == nil then
+
+        self:log(
+            "Idle indisponible : tick ignoré"
+        )
+
+
+        return
+
+    end
 
 
     --------------------------------------------------------
@@ -5384,15 +5509,7 @@ function obj:disable()
     -- Key Up
     --------------------------------------------------------
 
-    if self.keyUpTimer then
-
-        self.keyUpTimer:stop()
-
-
-        self.keyUpTimer =
-            nil
-
-    end
+    self:releaseActivityKey()
 
 
     --------------------------------------------------------
@@ -5797,15 +5914,36 @@ function obj:testKeepAlive()
         self.currentState
 
 
+    local previousKeepAliveTime =
+        self.lastKeepAliveTime
+
+
     self.currentState =
         self.STATE.KEEPALIVE
 
 
-    self:sendKeepAlive()
+    -- Sans protection, une erreur laisserait currentState sur
+    -- KEEPALIVE alors que rien n'a ete mis en place : ni watchers, ni
+    -- economies d'energie, et setState n'ayant pas ete appele, le menu
+    -- et le watcher de retour resteraient desynchronises.
+
+    pcall(
+        function()
+
+            self:sendKeepAlive()
+
+        end
+    )
 
 
     self.currentState =
         previousState
+
+
+    -- Un test manuel ne doit pas decaler le rythme reel des keepalives.
+
+    self.lastKeepAliveTime =
+        previousKeepAliveTime
 
 
     self:updateMenuBar()
@@ -6905,15 +7043,7 @@ function obj:stop()
     end
 
 
-    if self.keyUpTimer then
-
-        self.keyUpTimer:stop()
-
-
-        self.keyUpTimer =
-            nil
-
-    end
+    self:releaseActivityKey()
 
 
     if self.keyboardBacklightProbeTimer then
