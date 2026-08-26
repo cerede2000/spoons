@@ -70,7 +70,6 @@ local function nouvelleSession()
     obj.activeSpaceIDs = nil
     obj.showSpaceBadges = true
     obj.currentSpaceFirst = false
-    obj.crossSpaceActivation = "switch"
     obj.loadedExcludedBundleIDs = {}
     obj.ignoredBundlesSignature = "fige"
 end
@@ -177,10 +176,9 @@ for _, e in ipairs(obj.entries) do ordre[#ordre + 1] = e.id end
 R.check("désactivé : l'ordre d'usage est intact", ordre[1] .. "," .. ordre[2] .. "," .. ordre[3], "1,2,3")
 
 ------------------------------------------------------------
-R.section("Activation en mode « switch » : macOS bascule, rien ne bouge")
+R.section("Activation : macOS bascule, rien ne bouge")
 ------------------------------------------------------------
 nouvelleSession()
-obj.crossSpaceActivation = "switch"
 obj:step(1)                          -- sélection sur w2, l'autre bureau
 R.check("la sélection est bien celle d'ailleurs", obj.entries[obj.selectedIndex].id, 2)
 obj:commit()
@@ -212,54 +210,6 @@ end
 R.check("délai ordinaire", court, true)
 
 ------------------------------------------------------------
-R.section("Activation en mode « bring » : la fenêtre vient à nous")
-------------------------------------------------------------
--- C'est ce que fait Sanyam-G/switch via CGSMoveWindowsToManagedSpace :
--- aucune animation, aucun détour par Mission Control. En échange la
--- fenêtre change de bureau pour de bon.
-nouvelleSession()
-obj.crossSpaceActivation = "bring"
-obj:step(1)
-R.check("sélection sur la fenêtre d'ailleurs", obj.entries[obj.selectedIndex].id, 2)
-obj:commit()
-R.check("la fenêtre a été déplacée", #ctl.movedToSpace, 1)
-R.check("vers le bureau visible", ctl.movedToSpace[1].space, 1)
-R.check("c'est la bonne fenêtre", ctl.movedToSpace[1].id, 2)
-R.check("le focus suit", focus[#focus], 2)
-
-R.section("Plus de bascule à attendre : délai ordinaire")
-local long = false
-for _, t in ipairs(ctl.timers) do
-    if t.delay == obj.crossSpaceFocusDelay then long = true end
-end
-R.check("aucune attente d'animation", long, false)
-
-R.section("Une fenêtre d'ici n'est jamais déplacée")
-nouvelleSession()
-obj.crossSpaceActivation = "bring"
-obj:step(1)
-obj.selectedIndex = 1
-obj:commit()
-R.check("rien n'a bougé", #ctl.movedToSpace, 0)
-
-R.section("Un déplacement refusé retombe sur la bascule")
--- Une fenêtre en plein écran occupe son propre bureau et ne se déplace
--- pas. Il ne faut pas conclure qu'elle est arrivée.
-nouvelleSession()
-obj.crossSpaceActivation = "bring"
-ctl.moveSucceeds = false
-obj:step(1)
-obj:commit()
-R.check("aucun déplacement enregistré", #ctl.movedToSpace, 0)
-R.check("le focus est quand même demandé", focus[#focus], 2)
-local attente = false
-for _, t in ipairs(ctl.timers) do
-    if t.delay == obj.crossSpaceFocusDelay then attente = true end
-end
-R.check("et l'animation est de nouveau attendue", attente, true)
-
-
-------------------------------------------------------------
 R.section("Moniteurs sans espaces séparés : la lecture directe sauve tout")
 ------------------------------------------------------------
 -- hs.spaces.activeSpaces() passe par activeSpaceOnScreen(), qui remplace
@@ -281,14 +231,12 @@ obj:refreshActiveSpaces()
 R.check("les bureaux sont quand même relevés", obj.activeSpaceIDs and obj.activeSpaceIDs[1], true)
 R.check("le switcher reste utilisable", obj.spacesUsable, true)
 R.check("la pastille apparaît toujours", #obj:stateBadges({ id = 2 }), 1)
-R.check("et la destination est connue", obj:currentSpaceID(), 1)
 
 R.section("Repli sur l'API documentée si la lecture directe disparaît")
 nouvelleSession()
 ctl.managedDisplays = nil
 obj:refreshActiveSpaces()
 R.check("l'inventaire vient de activeSpaces()", obj.activeSpaceIDs[1], true)
-R.check("destination connue", obj:currentSpaceID(), 1)
 
 R.section("Les deux sources muettes : on éteint proprement")
 nouvelleSession()
@@ -297,76 +245,36 @@ ctl.activeSpacesBroken = true
 obj:refreshActiveSpaces()
 R.check("indisponible", obj.spacesUsable, false)
 R.check("aucun bureau", obj.activeSpaceIDs, nil)
-R.check("aucune destination", obj:currentSpaceID(), nil)
 
 ------------------------------------------------------------
-R.section("Le déplacement précède le réveil de la fenêtre")
+R.section("Aucune fenêtre n'est jamais déplacée")
 ------------------------------------------------------------
--- Démasquer ou restaurer d'abord fait basculer macOS vers le bureau de
--- la fenêtre : précisément ce que « bring » cherche à éviter. C'est
--- aussi l'ordre retenu par Sanyam-G/switch.
+-- Mesuré sur la machine, même binaire, mêmes permissions :
+--
+--                                  ma fenêtre   fenêtre d'une
+--                                               autre application
+--   CGSMoveWindowsToManagedSpace   RÉUSSI       échec
+--   SLSSetWindowListWorkspace      ÉCHEC 1006   échec
+--
+-- Un processus ne déplace que SES PROPRES fenêtres : Dock.app détient
+-- la seule connexion au window server autorisée à le faire pour les
+-- autres. Et depuis macOS 14.5, hs.spaces.moveWindowToSpace appelle
+-- SLSSetWindowListWorkspace, qui renvoie 1006 et ne fait rien — même
+-- sur la fenêtre du processus appelant — tout en renvoyant true.
+--
+-- Le switcher ne s'y essaie donc plus du tout.
 nouvelleSession()
-obj.crossSpaceActivation = "bring"
-local ordre = {}
-local cachee = lib.app(ctl, { name = "Mail", bundle = "com.apple.mail", hidden = true })
-local wcache = lib.window({ id = 2, app = cachee, title = "Ailleurs" })
-wcache.unminimize = function() ordre[#ordre + 1] = "unminimize" end
-wcache.focus = function() ordre[#ordre + 1] = "focus" end
-cachee.unhide = function() ordre[#ordre + 1] = "unhide"; cachee._hidden = false; return true end
-local vraiMove = hs.spaces.moveWindowToSpace
-hs.spaces.moveWindowToSpace = function(id, sp)
-    ordre[#ordre + 1] = "move"
-    return vraiMove(id, sp)
-end
-ctl.filterWindows = { wcache }
-ctl.allWindows = { wcache }
 obj:step(1)
+R.check("sélection sur la fenêtre d'ailleurs", obj.entries[obj.selectedIndex].id, 2)
 obj:commit()
-hs.spaces.moveWindowToSpace = vraiMove
-R.check("le déplacement d'abord", ordre[1], "move")
-R.check("puis le démasquage", ordre[2], "unhide")
-R.check("puis la restauration", ordre[3], "unminimize")
-R.check("et le focus en dernier", ordre[4], "focus")
+R.check("rien n'a été déplacé", #ctl.movedToSpace, 0)
+R.check("le focus est demandé", focus[#focus], 2)
 
-R.section("Un déplacement qui n'aboutit pas est constaté, pas cru")
--- Le retour de l'API ne fait pas foi : on relit la position. Une fenêtre
--- en plein écran occupe son propre bureau et ne bouge pas.
+R.section("Et rien n'est déplacé non plus pour une fenêtre d'ici")
 nouvelleSession()
-obj.crossSpaceActivation = "bring"
-local vraiMove2 = hs.spaces.moveWindowToSpace
--- l'API prétend avoir réussi, mais la fenêtre n'a pas bougé
-hs.spaces.moveWindowToSpace = function() return true end
-ctl.printed = {}
 obj:step(1)
+obj.selectedIndex = 1
 obj:commit()
-hs.spaces.moveWindowToSpace = vraiMove2
-R.check("le mensonge est détecté",
-    table.concat(ctl.printed, " "):find("Deplacement refuse", 1, true) ~= nil, true)
-R.check("et le journal dit d'où vers où",
-    table.concat(ctl.printed, " "):find("bureau 2 vers 1", 1, true) ~= nil, true)
-
-R.section("Un refus levé comme erreur Lua garde son message")
--- libspaces.m lève ses refus (« target space ID %d does not refer to a
--- user space »…) au lieu de les renvoyer. safeCall les avalait, et le
--- journal disait « raison inconnue » : rien à diagnostiquer.
-nouvelleSession()
-obj.crossSpaceActivation = "bring"
-local vraiMove3 = hs.spaces.moveWindowToSpace
-hs.spaces.moveWindowToSpace = function()
-    error("source space for windowID 2 is not a user space")
-end
-ctl.printed = {}
-obj:step(1)
-obj:commit()
-hs.spaces.moveWindowToSpace = vraiMove3
-R.check("le message de libspaces est journalisé",
-    table.concat(ctl.printed, " "):find("is not a user space", 1, true) ~= nil, true)
-R.check("plus de « raison inconnue »",
-    table.concat(ctl.printed, " "):find("raison inconnue", 1, true) ~= nil, false)
-local attente = false
-for _, t in ipairs(ctl.timers) do
-    if t.delay == obj.crossSpaceFocusDelay then attente = true end
-end
-R.check("et la bascule est de nouveau attendue", attente, true)
+R.check("aucun déplacement", #ctl.movedToSpace, 0)
 
 R.finish()

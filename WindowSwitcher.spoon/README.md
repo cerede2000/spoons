@@ -208,46 +208,55 @@ et le mode `"bring"` la deplace comme les autres.
 Une version precedente les ecartait, en supposant qu'une fenetre reduite
 n'appartenait plus a aucun bureau. C'etait faux.
 
-#### Activer une fenetre d'un autre bureau
+#### On ne peut pas faire venir une fenetre a soi
 
-```lua
-spoon.WindowSwitcher.crossSpaceActivation = "switch"   -- defaut
+C'est ce que promet [Sanyam-G/switch](https://github.com/Sanyam-G/switch) :
+amener la fenetre sur le bureau courant plutot que d'y aller. Mesure
+faite sur cette machine, meme binaire, memes permissions :
+
+| | ma fenetre | fenetre d'une autre application |
+|---|---|---|
+| `CGSMoveWindowsToManagedSpace` | **reussi** | echec |
+| `SLSSetWindowListWorkspace` | **echec 1006** | echec |
+
+Deux raisons independantes, chacune suffisante.
+
+**Un processus ne deplace que ses propres fenetres.** Dock.app detient
+la seule connexion au window server autorisee a le faire pour les
+autres. C'est precisement pour cela que yabai injecte une extension
+dans Dock.app, ce qui exige de desactiver SIP. Le service de capture
+n'y changerait rien : c'est un processus ordinaire lui aussi.
+
+**Et l'appel de Hammerspoon ne fonctionne plus.** Depuis macOS 14.5,
+`hs.spaces.moveWindowToSpace` passe par `SLSSetWindowListWorkspace`,
+qui renvoie 1006 et ne fait rien — meme sur la fenetre du processus
+appelant — tout en renvoyant `true`. D'ou, dans le journal :
+`l'API a dit oui, la fenetre n'a pas bouge`.
+
+Sanyam-G/switch appelle la meme fonction avec sa propre connexion et
+**ne verifie jamais le resultat** :
+
+```swift
+let cid = CGSMainConnectionID()
+CGSMoveWindowsToManagedSpace(cid, ids, currentSpace)
 ```
 
-| Valeur | Effet |
-|---|---|
-| `"switch"` | macOS bascule vers le bureau de la fenetre, avec son animation. La fenetre ne bouge pas. |
-| `"bring"` | La fenetre vient sur le bureau courant. Aucune animation, aucun detour. Elle change de bureau pour de bon. |
+Le deplacement echoue, puis leur `app.activate()` laisse macOS basculer
+de bureau. L'utilisateur arrive a sa fenetre sans savoir lequel des deux
+chemins a servi.
 
-`"bring"` est ce que fait [Sanyam-G/switch](https://github.com/Sanyam-G/switch)
-via `CGSMoveWindowsToManagedSpace`, expose ici par
-`hs.spaces.moveWindowToSpace`.
-
-Le deplacement passe **avant** le demasquage, la restauration et le
-focus : reveiller la fenetre d'abord fait basculer macOS vers son
-bureau, precisement ce qu'on cherche a eviter. C'est aussi l'ordre
-retenu par Sanyam-G/switch.
-
-Le retour de l'API ne fait pas foi : la position est **relue** apres le
-deplacement. Une fenetre en plein ecran occupe son propre bureau et ne
-bouge pas ; on le constate au lieu de le croire, on le journalise, et on
-retombe sur la bascule.
-
-`hs.spaces.gotoSpace` n'est **pas** utilise : il ouvre Mission Control
-et clique sur la vignette du bureau. Une demi-seconde d'animation
-visible a chaque Alt+Tab n'a pas sa place ici.
-
-En mode `"switch"`, la verification du focus attend
-`crossSpaceFocusDelay` (0,7 s) au lieu du delai ordinaire : verifier
-pendant la bascule trouve le focus sur la fenetre precedente et
-declenche une reprise qui se bat contre l'animation en cours.
+Le switcher ne s'y essaie donc pas : macOS bascule, avec son animation
+native. La verification du focus attend `crossSpaceFocusDelay` (0,7 s)
+au lieu du delai ordinaire, verifier pendant la bascule trouvant le
+focus sur la fenetre precedente.
 
 #### Autres reglages
 
 ```lua
-spoon.WindowSwitcher.showSpaceBadges = true    -- la pastille
-spoon.WindowSwitcher.currentSpaceFirst = false -- grouper le bureau courant devant
-spoon.WindowSwitcher.includeOtherSpaces = true -- lister les autres bureaux
+spoon.WindowSwitcher.showSpaceBadges = true     -- la pastille
+spoon.WindowSwitcher.currentSpaceFirst = false  -- grouper le bureau courant devant
+spoon.WindowSwitcher.includeOtherSpaces = true  -- lister les autres bureaux
+spoon.WindowSwitcher.crossSpaceFocusDelay = 0.7 -- attente de la bascule
 ```
 
 `currentSpaceFirst` place les fenetres du bureau courant avant les

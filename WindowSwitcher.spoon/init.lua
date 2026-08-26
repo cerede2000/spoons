@@ -70,7 +70,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.18.2"
+obj.version = "0.19.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -208,22 +208,31 @@ obj.badges = {
 -- fenetres vivantes.
 obj.showSpaceBadges = true
 
--- Que faire quand la fenetre choisie est sur un autre bureau.
+-- Il n'existe pas de mode "amener la fenetre a soi". Mesure faite sur
+-- cette machine, meme binaire, memes permissions :
 --
---   "switch" : ne rien forcer. macOS bascule de lui-meme vers le bureau
---              de la fenetre quand son application est activee, avec
---              l'animation native. La fenetre ne bouge pas.
+--                                    ma fenetre   fenetre d'une
+--                                                 autre application
+--   CGSMoveWindowsToManagedSpace     REUSSI       echec
+--   SLSSetWindowListWorkspace        ECHEC 1006   echec
 --
---   "bring"  : amener la fenetre sur le bureau courant. Aucune
---              animation, aucun detour par Mission Control -- c'est ce
---              que fait Sanyam-G/switch via CGSMoveWindowsToManagedSpace,
---              expose ici par hs.spaces.moveWindowToSpace. En echange,
---              la fenetre change de bureau pour de bon.
+-- Deux raisons independantes, chacune suffisante :
 --
--- hs.spaces.gotoSpace n'est volontairement pas utilise : il ouvre
--- Mission Control et clique sur la vignette du bureau. Une demi-seconde
--- d'animation visible a chaque Alt+Tab n'a pas sa place ici.
-obj.crossSpaceActivation = "switch"
+-- 1. Un processus ne peut deplacer que SES PROPRES fenetres. Dock.app
+--    detient la seule connexion au window server autorisee a le faire
+--    pour les autres. C'est pour cela que yabai injecte une extension
+--    dans Dock.app, ce qui exige de desactiver SIP.
+--
+-- 2. Depuis macOS 14.5, hs.spaces.moveWindowToSpace appelle
+--    SLSSetWindowListWorkspace, qui renvoie 1006 et ne fait rien --
+--    meme sur la fenetre du processus appelant. Hammerspoon renvoie
+--    true sans verifier, d'ou "l'API a dit oui, la fenetre n'a pas
+--    bouge" dans le journal.
+--
+-- Le service de capture n'y changerait rien : c'est un processus
+-- ordinaire lui aussi, soumis a la premiere regle.
+--
+-- Reste donc la bascule native de macOS, qui fonctionne.
 
 -- La bascule de bureau dure environ une demi-seconde. Verifier le focus
 -- plus tot le trouve force sur la mauvaise fenetre et declenche une
@@ -773,10 +782,6 @@ obj.activeSpaceIDs = nil
 -- Faux des qu'un appel a hs.spaces a echoue : on cesse d'insister pour
 -- la session en cours.
 obj.spacesUsable = true
-
--- Bureau visible de l'ecran qui a le clavier, releve en meme temps que
--- les autres. Destination d'une fenetre qu'on fait venir a soi.
-obj.currentSpace = nil
 
 obj.windowFilterInstance = nil
 
@@ -1662,18 +1667,13 @@ function obj:refreshActiveSpaces()
         nil
 
 
-    self.currentSpace =
-        nil
-
-
     self.spacesUsable =
         spaces ~= nil
 
 
     if not self.spacesUsable
         or not (self.showSpaceBadges
-            or self.currentSpaceFirst
-            or self.crossSpaceActivation == "bring") then
+            or self.currentSpaceFirst) then
 
         return self
 
@@ -1688,10 +1688,6 @@ function obj:refreshActiveSpaces()
         0
 
 
-    local principal =
-        nil
-
-
     local ecrans =
         safeCall(function()
 
@@ -1701,14 +1697,6 @@ function obj:refreshActiveSpaces()
 
 
     if type(ecrans) == "table" then
-
-        local uuidPrincipal =
-            safeCall(function()
-
-                return screen.mainScreen():getUUID()
-
-            end)
-
 
         for _, ecran in ipairs(ecrans) do
 
@@ -1728,15 +1716,6 @@ function obj:refreshActiveSpaces()
 
                 compte =
                     compte + 1
-
-
-                if principal == nil
-                    or ecran["Display Identifier"] == uuidPrincipal then
-
-                    principal =
-                        spaceID
-
-                end
 
             end
 
@@ -1772,10 +1751,6 @@ function obj:refreshActiveSpaces()
                     compte =
                         compte + 1
 
-
-                    principal =
-                        principal or spaceID
-
                 end
 
             end
@@ -1800,21 +1775,7 @@ function obj:refreshActiveSpaces()
         visibles
 
 
-    self.currentSpace =
-        principal
-
-
     return self
-
-end
-
-
--- Bureau visible sur l'ecran qui a le clavier. C'est la destination
--- naturelle d'une fenetre qu'on fait venir a soi.
-
-function obj:currentSpaceID()
-
-    return self.currentSpace
 
 end
 
@@ -7056,21 +7017,6 @@ function obj:commit()
         self:isOnOtherSpace(selected) == true
 
 
-    -- Le deplacement passe avant tout ce qui reveille la fenetre.
-    -- Demasquer l'application ou restaurer la fenetre d'abord fait
-    -- basculer macOS vers son bureau : precisement ce que le mode
-    -- "bring" cherche a eviter. C'est aussi l'ordre retenu par
-    -- Sanyam-G/switch, qui appelle CGSMoveWindowsToManagedSpace avant
-    -- toute activation.
-
-    if ailleurs then
-
-        ailleurs =
-            self:resolveCrossSpace(selected)
-
-    end
-
-
     if selected.hidden and selected.application then
 
         safeCall(function()
@@ -7104,151 +7050,6 @@ function obj:commit()
         selected,
         ailleurs and self.crossSpaceFocusDelay or nil
     )
-
-end
-
-
--- Fenetre sur un autre bureau. Renvoie true si la bascule reste a la
--- charge de macOS, false si la fenetre a ete amenee ici et qu'il n'y
--- aura donc aucun changement de bureau a attendre.
-
-function obj:resolveCrossSpace(selected)
-
-    if self.crossSpaceActivation ~= "bring" then
-
-        return true
-
-    end
-
-
-    local destination =
-        self:currentSpaceID()
-
-
-    if not destination then
-
-        return true
-
-    end
-
-
-    local depart =
-        table.concat(
-            safeCall(function()
-
-                return spaces.windowSpaces(selected.id)
-
-            end) or {},
-            ","
-        )
-
-
-    -- safeCall jetterait le message : les refus de libspaces.m sont
-    -- leves comme des erreurs Lua, pas renvoyes. Sans ce message il
-    -- n'y a rien a diagnostiquer.
-
-    local appelOK,
-          retour =
-        pcall(function()
-
-            local deplacee,
-                  err =
-                spaces.moveWindowToSpace(
-                    selected.id,
-                    destination
-                )
-
-
-            return { deplacee = deplacee, err = err }
-
-        end)
-
-
-    local motif
-
-
-    if not appelOK then
-
-        motif =
-            "erreur : " .. tostring(retour)
-
-    elseif retour and retour.err then
-
-        motif =
-            tostring(retour.err)
-
-    elseif retour and retour.deplacee then
-
-        motif =
-            "l'API a dit oui, la fenetre n'a pas bouge"
-
-    else
-
-        motif =
-            "l'API n'a rien signale"
-
-    end
-
-
-    -- Le retour de l'API ne suffit pas a conclure : on relit la
-    -- position. Une fenetre en plein ecran occupe son propre bureau et
-    -- ne se deplace pas, et rien ne garantit qu'un refus soit toujours
-    -- signale. Ce qui fait foi, c'est ou la fenetre se trouve ensuite.
-
-    local maintenant =
-        safeCall(function()
-
-            return spaces.windowSpaces(selected.id)
-
-        end)
-
-
-    local arrivee =
-        false
-
-
-    if type(maintenant) == "table" then
-
-        for _, spaceID in ipairs(maintenant) do
-
-            if spaceID == destination then
-
-                arrivee =
-                    true
-
-
-                break
-
-            end
-
-        end
-
-    end
-
-
-    if not arrivee then
-
-        self:log(
-            "Deplacement refuse pour "
-            .. tostring(selected.displayTitle)
-            .. " [fenetre " .. tostring(selected.id)
-            .. ", bureau " .. tostring(depart)
-            .. " vers " .. tostring(destination)
-            .. "] : " .. motif
-            .. ". macOS bascule de bureau a la place."
-        )
-
-
-        return true
-
-    end
-
-
-    selected.onOtherSpace =
-        false
-
-
-    return false
 
 end
 
