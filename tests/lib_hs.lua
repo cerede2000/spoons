@@ -241,6 +241,23 @@ function M.install(opts)
     })
     _G.hs = hs
 
+    -- Chargement des Spoons, comme le fait Hammerspoon : le fichier
+    -- init.lua du depot peut ainsi etre execute tel quel.
+    _G.spoon = {}
+    ctl.spoonFailures = {}
+    ctl.loadedSpoons = {}
+    hs.loadSpoon = function(name)
+        if ctl.spoonFailures[name] then
+            error("Spoon indisponible pour l'essai : " .. name)
+        end
+        local path = (opts.spoonRoot or ".") .. "/" .. name .. ".spoon/init.lua"
+        local chunk, err = loadfile(path)
+        if not chunk then error(err) end
+        _G.spoon[name] = chunk()
+        table.insert(ctl.loadedSpoons, name)
+        return _G.spoon[name]
+    end
+
     -- WindowSwitcher fait require("hs.canvas") et consorts.
     local realRequire = require
     ctl.realRequire = realRequire

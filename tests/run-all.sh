@@ -16,7 +16,8 @@ for pair in \
     "sm_robustesse:SpoonManager.spoon/init.lua" \
     "ws_fenetres:WindowSwitcher.spoon/init.lua" \
     "ws_capture:WindowSwitcher.spoon/init.lua" \
-    "ws_session:WindowSwitcher.spoon/init.lua" ; do
+    "ws_session:WindowSwitcher.spoon/init.lua" \
+    "config:init.lua" ; do
     suite=${pair%%:*}; target=${pair#*:}
     line=$(lua "tests/$suite.lua" "$target" 2>&1 | grep -oE '^=> [0-9]+/[0-9]+' || echo "=> ERREUR")
     n=$(echo "$line" | grep -oE '[0-9]+/[0-9]+' | cut -d/ -f1)

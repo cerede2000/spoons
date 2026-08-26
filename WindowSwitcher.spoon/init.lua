@@ -70,8 +70,6 @@ obj.license = "MIT"
 -- CONFIGURATION PUBLIQUE
 ------------------------------------------------------------
 
-obj.showNotifications = true
-
 obj.verboseLogging = false
 
 obj.includeMinimized = true
@@ -772,24 +770,6 @@ function obj:debug(message)
     end
 
 end
-
-
-function obj:notify(title, message)
-
-    if not self.showNotifications then
-
-        return
-
-    end
-
-
-    hs.notify.new({
-        title = title,
-        informativeText = message,
-    }):send()
-
-end
-
 
 
 ------------------------------------------------------------
