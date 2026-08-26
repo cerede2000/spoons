@@ -356,19 +356,20 @@ final class WindowCaptureHelper: NSObject, NSApplicationDelegate {
         let expectedAppName = cleaned(request.appName)
         let expectedTitle = cleaned(request.title)
 
-        if targetWindow == nil && (!expectedTitle.isEmpty || !expectedAppName.isEmpty) {
+        // Repli lorsque le windowID n'est plus dans l'inventaire : la
+        // fenetre a pu etre recreee entre la demande et la capture.
+        //
+        // La correspondance est stricte, et les deux champs sont
+        // exiges. La version precedente acceptait les correspondances
+        // partielles dans les deux sens, avec un titre vide traite
+        // comme un joker : une demande pour "mail" sans titre capturait
+        // la premiere fenetre d'une application nommee "mailbox", quel
+        // que soit son contenu. Un identifiant introuvable devenait
+        // ainsi une capture arbitraire.
+        if targetWindow == nil, !expectedTitle.isEmpty, !expectedAppName.isEmpty {
             targetWindow = content.windows.first(where: { window in
-                let title = cleaned(window.title ?? "")
-                let appName = cleaned(window.owningApplication?.applicationName ?? "")
-                let appMatches = expectedAppName.isEmpty
-                    || appName == expectedAppName
-                    || appName.contains(expectedAppName)
-                    || expectedAppName.contains(appName)
-                let titleMatches = expectedTitle.isEmpty
-                    || title == expectedTitle
-                    || title.contains(expectedTitle)
-                    || expectedTitle.contains(title)
-                return appMatches && titleMatches
+                cleaned(window.title ?? "") == expectedTitle
+                    && cleaned(window.owningApplication?.applicationName ?? "") == expectedAppName
             })
         }
 

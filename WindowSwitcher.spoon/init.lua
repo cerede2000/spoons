@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.10.3"
+obj.version = "0.11.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -163,7 +163,29 @@ obj.screenCaptureRequestTimeoutSeconds = 6.5
 
 obj.screenCapturePollIntervalSeconds = 0.08
 
-obj.screenCaptureSessionBaseDirectory = "/tmp/WindowSwitcher"
+-- /tmp est partage et inscriptible par tous (mode 1777) : un
+-- repertoire cree a l'avance par un autre compte, laisse ouvert en
+-- lecture, aurait accueilli nos captures. TMPDIR est le repertoire
+-- temporaire propre a l'utilisateur, deja en 0700 et hors de portee des
+-- autres comptes. On retombe sur /tmp seulement s'il est introuvable,
+-- et la verification de propriete s'applique dans les deux cas.
+obj.screenCaptureSessionBaseDirectory =
+    (function()
+
+        local temporary =
+            os.getenv("TMPDIR")
+
+
+        if temporary and temporary ~= "" then
+
+            return (temporary:gsub("/+$", "")) .. "/WindowSwitcher"
+
+        end
+
+
+        return "/tmp/WindowSwitcher"
+
+    end)()
 
 obj.screenCaptureSessionPrefix = "session-"
 
@@ -474,6 +496,8 @@ obj.previewIndex = nil
 
 obj.previewVisible = false
 
+obj.cachedUserID = nil
+
 obj.selectionFromMouse = false
 
 
@@ -780,6 +804,82 @@ function obj:defaultScreenCaptureHelperPath()
 
 
     return nil
+
+end
+
+
+-- Le binaire livre est signe ad hoc : le recompiler change son cdhash
+-- et revoque l'autorisation Enregistrement de l'ecran. On ne compile
+-- donc jamais tout seul, mais on signale quand la source a evolue sans
+-- que le binaire ait suivi : sinon un durcissement ecrit dans le .swift
+-- donnerait l'illusion d'etre en place.
+
+function obj:helperSourcePath()
+
+    local path =
+        self:getSpoonDirectory()
+
+
+    if path then
+
+        return path .. "/window-capture-helper.swift"
+
+    end
+
+
+    return nil
+
+end
+
+
+function obj:checkHelperFreshness()
+
+    local sourcePath =
+        self:helperSourcePath()
+
+
+    local binaryPath =
+        self.screenCaptureHelperPath or self:defaultScreenCaptureHelperPath()
+
+
+    if not sourcePath or not binaryPath then
+
+        return true
+
+    end
+
+
+    local sourceTime =
+        fs.attributes(sourcePath, "modification")
+
+
+    local binaryTime =
+        fs.attributes(binaryPath, "modification")
+
+
+    if not sourceTime or not binaryTime then
+
+        return true
+
+    end
+
+
+    if sourceTime <= binaryTime then
+
+        return true
+
+    end
+
+
+    self:log(
+        "ATTENTION : window-capture-helper.swift est plus recent que le "
+        .. "binaire en service. Les corrections de la source ne sont pas "
+        .. "actives. Recompiler avec swiftc, puis reaccorder "
+        .. "Enregistrement de l'ecran (la signature change)."
+    )
+
+
+    return false
 
 end
 
@@ -2083,6 +2183,102 @@ function obj:chmod(path, mode)
 end
 
 
+-- L'identifiant de l'utilisateur courant, lu sur son propre dossier
+-- personnel : Hammerspoon n'expose pas getuid().
+
+function obj:currentUserID()
+
+    if self.cachedUserID ~= nil then
+
+        return self.cachedUserID
+
+    end
+
+
+    local home =
+        os.getenv("HOME")
+
+
+    local attributes =
+        home and fs.attributes(home)
+
+
+    self.cachedUserID =
+        (attributes and attributes.uid) or false
+
+
+    return self.cachedUserID
+
+end
+
+
+-- Un repertoire n'est acceptable que s'il nous appartient, qu'il n'est
+-- ouvert ni au groupe ni aux autres, et qu'il n'est pas un lien
+-- symbolique pointant ailleurs.
+--
+-- Renvoie ok, motif.
+
+function obj:isPrivateDirectory(path)
+
+    local link =
+        fs.symlinkAttributes and fs.symlinkAttributes(path)
+
+
+    if link and link.mode == "link" then
+
+        return false, "lien symbolique"
+
+    end
+
+
+    local attributes =
+        fs.attributes(path)
+
+
+    if not attributes then
+
+        return false, "absent"
+
+    end
+
+
+    if attributes.mode ~= "directory" then
+
+        return false, "n'est pas un repertoire"
+
+    end
+
+
+    local uid =
+        self:currentUserID()
+
+
+    if uid and attributes.uid and attributes.uid ~= uid then
+
+        return false,
+            "appartient a l'uid " .. tostring(attributes.uid)
+
+    end
+
+
+    local permissions =
+        tostring(attributes.permissions or "")
+
+
+    if #permissions == 9
+        and permissions:sub(4) ~= "------" then
+
+        return false,
+            "ouvert au groupe ou aux autres (" .. permissions .. ")"
+
+    end
+
+
+    return true
+
+end
+
+
 function obj:ensureDirectory(path, mode)
 
     if not fs.attributes(path) then
@@ -2103,7 +2299,30 @@ function obj:ensureDirectory(path, mode)
     end
 
 
-    return fs.attributes(path) ~= nil
+    -- Un repertoire preexistant n'est pas forcement le notre. Sans ce
+    -- controle, il suffisait de creer le repertoire de base avant nous
+    -- pour lire toutes les captures qui y passeraient ensuite.
+
+    local ok,
+          reason =
+        self:isPrivateDirectory(path)
+
+
+    if not ok then
+
+        self:log(
+            "Repertoire de capture refuse : "
+            .. tostring(path)
+            .. " (" .. tostring(reason) .. ")"
+        )
+
+
+        return false
+
+    end
+
+
+    return true
 
 end
 
@@ -2180,6 +2399,22 @@ function obj:createScreenCaptureSession()
         or not self:ensureDirectory(self:screenCaptureRequestDirectory(), "700")
         or not self:ensureDirectory(self:screenCaptureCaptureDirectory(), "700") then
 
+        -- On ne reessaie pas en boucle : tant que l'emplacement n'est
+        -- pas sur, aucune capture ne doit partir. Le switcher continue
+        -- de fonctionner avec les icones d'application.
+
+        self.screenCaptureDisabledReason =
+            "emplacement de capture non sur"
+
+
+        self.screenCaptureSessionDirectory =
+            nil
+
+
+        self.screenCaptureSessionSecret =
+            nil
+
+
         return false
 
     end
@@ -2243,6 +2478,52 @@ function obj:removeScreenCaptureSession()
 
     self.screenCaptureSessionDirectory =
         nil
+
+
+    return self
+
+end
+
+
+-- Emplacements utilises par les versions precedentes. On les efface au
+-- demarrage pour ne pas laisser d'anciennes captures dans /tmp, mais
+-- seulement apres avoir verifie qu'ils nous appartiennent : on ne
+-- supprime pas recursivement un repertoire dont on n'est pas sur.
+
+obj.legacySessionBaseDirectories = {
+    "/tmp/WindowSwitcher",
+}
+
+
+function obj:cleanupLegacySessionDirectories()
+
+    for _, path in ipairs(self.legacySessionBaseDirectories or {}) do
+
+        if path ~= self.screenCaptureSessionBaseDirectory
+            and fs.attributes(path) then
+
+            local ok,
+                  reason =
+                self:isPrivateDirectory(path)
+
+
+            if ok then
+
+                self:removeSessionDirectory(path)
+
+            else
+
+                self:log(
+                    "Ancien repertoire de capture laisse en place : "
+                    .. tostring(path)
+                    .. " (" .. tostring(reason) .. ")"
+                )
+
+            end
+
+        end
+
+    end
 
 
     return self
@@ -5525,6 +5806,8 @@ function obj:start()
 
     self:createScreenCaptureSession()
     self:cleanupScreenCaptureSessions()
+    self:cleanupLegacySessionDirectories()
+    self:checkHelperFreshness()
 
 
     self:refreshIgnoredBundles(true)

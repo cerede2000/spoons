@@ -14,6 +14,7 @@ local HELPER = "/fake/WindowSwitcherCapture.app/Contents/MacOS/window-capture-he
 local APP    = "/fake/WindowSwitcherCapture.app"
 obj.screenCaptureHelperPath = HELPER
 obj.screenCaptureHelperAppPath = APP
+obj.defaultBase = obj.screenCaptureSessionBaseDirectory
 obj.screenCaptureSessionBaseDirectory = "/tmp/ws-test"
 ctl.files[HELPER] = { data = "", mtime = 1 }
 ctl.dirs[APP] = { mtime = 1 }
@@ -272,6 +273,108 @@ R.check("motif enregistré", obj.screenCaptureDisabledReason ~= nil, true)
 R.check("la file est vidée", #obj.screenCaptureQueue, 0)
 obj:queueScreenCapture(descriptor(53, { minimized = true }))
 R.check("plus aucune mise en file", obj.runningScreenCaptures[53], nil)
+
+------------------------------------------------------------
+R.section("Sécurité : l'emplacement des captures est vérifié")
+-- /tmp est inscriptible par tous. Sans contrôle, il suffisait de créer
+-- le répertoire de base avant nous pour lire toutes les captures.
+------------------------------------------------------------
+reset()
+ctl.dirs = {}
+ctl.links = {}
+local BASE = "/tmp/ws-test"
+obj.screenCaptureSessionBaseDirectory = BASE
+-- l'uid courant est lu sur le dossier personnel
+ctl.dirs[os.getenv("HOME")] = { uid = ctl.uid, permissions = "rwx------" }
+obj.cachedUserID = nil
+R.check("uid courant reconnu", obj:currentUserID(), ctl.uid)
+
+R.check("un répertoire à nous, fermé, est accepté",
+    (function() ctl.dirs[BASE] = { uid = ctl.uid, permissions = "rwx------" }
+       return obj:isPrivateDirectory(BASE) end)(), true)
+
+ctl.dirs[BASE] = { uid = 502, permissions = "rwx------" }
+local ok, motif = obj:isPrivateDirectory(BASE)
+R.check("un répertoire d'un autre compte est refusé", ok, false)
+R.check("le motif le dit", motif:find("uid 502", 1, true) ~= nil, true)
+
+ctl.dirs[BASE] = { uid = ctl.uid, permissions = "rwxrwxrwx" }
+ok, motif = obj:isPrivateDirectory(BASE)
+R.check("un répertoire ouvert à tous est refusé", ok, false)
+R.check("le motif le dit", motif:find("ouvert", 1, true) ~= nil, true)
+
+ctl.dirs[BASE] = { uid = ctl.uid, permissions = "rwx--x---" }
+R.check("un simple bit de groupe suffit à refuser",
+    (obj:isPrivateDirectory(BASE)), false)
+
+ctl.dirs[BASE] = { uid = ctl.uid, permissions = "rwx------" }
+ctl.links[BASE] = "/ailleurs"
+ok, motif = obj:isPrivateDirectory(BASE)
+R.check("un lien symbolique est refusé", ok, false)
+R.check("le motif le dit", motif, "lien symbolique")
+ctl.links = {}
+
+ctl.dirs[BASE] = nil
+R.check("un répertoire absent est refusé", (obj:isPrivateDirectory(BASE)), false)
+
+R.section("Une base non sûre coupe les captures, sans casser le switcher")
+reset()
+ctl.dirs = {}
+ctl.dirs[os.getenv("HOME")] = { uid = ctl.uid, permissions = "rwx------" }
+ctl.dirs[BASE] = { uid = 502, permissions = "rwxrwxrwx" }
+obj.screenCaptureSessionDirectory = nil
+obj.screenCaptureSessionSecret = nil
+R.check("la session est refusée", obj:createScreenCaptureSession(), false)
+R.check("aucun répertoire de session retenu", obj.screenCaptureSessionDirectory, nil)
+R.check("aucun secret en mémoire", obj.screenCaptureSessionSecret, nil)
+R.check("motif enregistré", obj.screenCaptureDisabledReason, "emplacement de capture non sur")
+obj:queueScreenCapture(descriptor(60, { minimized = true }))
+R.check("plus aucune requête n'est écrite", obj.runningScreenCaptures[60], nil)
+R.check("aucun service n'est lancé", #ctl.launchedApps, 0)
+
+R.section("Le répertoire de base est privé à l'utilisateur")
+R.check("il n'est pas dans /tmp partagé",
+    obj.defaultBase:find("^/tmp/") == nil, true)
+
+R.section("L'ancien emplacement /tmp est nettoyé, s'il est bien à nous")
+reset()
+ctl.dirs = {}
+ctl.dirs[os.getenv("HOME")] = { uid = ctl.uid, permissions = "rwx------" }
+obj.screenCaptureSessionBaseDirectory = "/prive/ws"
+ctl.dirs["/tmp/WindowSwitcher"] = { uid = ctl.uid, permissions = "rwx------" }
+ctl.tasks = {}
+obj:cleanupLegacySessionDirectories()
+R.check("supprimé", #ctl.tasks, 1)
+R.check("par /bin/rm sans shell", ctl.tasks[1].cmd, "/bin/rm")
+
+ctl.dirs["/tmp/WindowSwitcher"] = { uid = 502, permissions = "rwxrwxrwx" }
+ctl.tasks = {}
+ctl.printed = {}
+obj:cleanupLegacySessionDirectories()
+R.check("un répertoire qui n'est pas à nous n'est pas supprimé", #ctl.tasks, 0)
+R.check("mais il est signalé",
+    table.concat(ctl.printed, " "):find("laisse en place", 1, true) ~= nil, true)
+obj.screenCaptureSessionBaseDirectory = BASE
+
+R.section("Un binaire de helper périmé est signalé")
+reset()
+ctl.files["/fake/src.swift"] = { data = "", mtime = 100 }
+local vraiSource = obj.helperSourcePath
+obj.helperSourcePath = function() return "/fake/src.swift" end
+ctl.files[HELPER].mtime = 200
+ctl.printed = {}
+R.check("binaire plus récent : rien à signaler", obj:checkHelperFreshness(), true)
+R.check("aucun message", #ctl.printed, 0)
+
+ctl.files["/fake/src.swift"].mtime = 300
+ctl.printed = {}
+R.check("source plus récente : signalé", obj:checkHelperFreshness(), false)
+R.check("le message dit quoi faire",
+    table.concat(ctl.printed, " "):find("Recompiler", 1, true) ~= nil, true)
+R.check("et prévient de la perte d'autorisation",
+    table.concat(ctl.printed, " "):find("Enregistrement de l'ecran", 1, true) ~= nil, true)
+obj.helperSourcePath = vraiSource
+ctl.files[HELPER].mtime = 1
 
 ------------------------------------------------------------
 R.section("Les sessions temporaires ne s'empilent plus")

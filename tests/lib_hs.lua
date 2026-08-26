@@ -22,6 +22,7 @@ function M.install(opts)
         allWindows = {}, filterWindows = nil, filtersCreated = 0, filtersDeleted = 0,
         snapshotIDs = {}, snapshotFails = {}, tasks = {},
         files = {}, dirs = {}, removed = {}, launchedApps = {}, osExec = {},
+        links = {}, uid = 501,
         focused = {}, unminimized = {}, unhidden = {},
     }
 
@@ -85,16 +86,29 @@ function M.install(opts)
         end,
         fs = {
             attributes = function(p, field)
-                if ctl.files[p] then
-                    if field == "modification" then return ctl.files[p].mtime or 1 end
-                    return { mode = "file" }
+                local function shape(entry, kind)
+                    if field == "modification" then return entry.mtime or 1 end
+                    local a = {
+                        mode = kind,
+                        uid = entry.uid or ctl.uid,
+                        gid = entry.gid or 20,
+                        permissions = entry.permissions or (kind == "directory" and "rwx------" or "rw-------"),
+                        mtime = entry.mtime or 1,
+                    }
+                    if field then return a[field] end
+                    return a
                 end
-                if ctl.dirs[p] then
-                    if field == "modification" then return ctl.dirs[p].mtime or 1 end
-                    return { mode = "directory" }
-                end
+                if ctl.files[p] then return shape(ctl.files[p], "file") end
+                if ctl.dirs[p] then return shape(ctl.dirs[p], "directory") end
                 if p:match("homebrew") then return { mode = "file" } end
                 return nil
+            end,
+            symlinkAttributes = function(p, field)
+                if ctl.links[p] then
+                    if field then return ({ mode = "link" })[field] end
+                    return { mode = "link", target = ctl.links[p] }
+                end
+                return hs.fs.attributes(p, field)
             end,
             mkdir = function(p) ctl.dirs[p] = { mtime = 1 }; return true end,
             dir = function(p)
