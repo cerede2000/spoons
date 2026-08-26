@@ -70,6 +70,16 @@ obj:stop()
 R.check("stop() relâche la touche", ups(), 1)
 
 R.section("Le verrou de keepalive ne peut pas rester fermé")
+-- Les methodes reelles sont restaurees ensuite : sans cela, les
+-- sections suivantes testeraient les bouchons.
+local realSenders = {
+    sendUserActivity = obj.sendUserActivity,
+    sendKeyboardActivity = obj.sendKeyboardActivity,
+    sendMouseActivity = obj.sendMouseActivity,
+    scheduleKeyboardBacklightEnforce = obj.scheduleKeyboardBacklightEnforce,
+    sendKeepAlive = obj.sendKeepAlive,
+    restoreEnergySavingState = obj.restoreEnergySavingState,
+}
 ready()
 obj.currentState = obj.STATE.KEEPALIVE
 obj.sendUserActivity  = function() return false end
@@ -106,5 +116,46 @@ obj:checkIdleState()
 R.check("aucune restauration déclenchée", restored, false)
 R.check("toujours en mode vert", obj.currentState, obj.STATE.KEEPALIVE)
 hs.host.idleTime = realIdle
+
+for name, fn in pairs(realSenders) do obj[name] = fn end
+
+R.section("Raccourcis pilotés par table")
+local MAP = { toggle={{"ctrl","alt","cmd"},"J"}, menu={{"ctrl","alt","cmd"},"M"},
+              status={{"ctrl","alt","cmd"},"U"}, test={{"ctrl","alt","cmd"},"T"} }
+local function nb() local c=0 for _ in pairs(obj.hotkeys) do c=c+1 end return c end
+R.check("actifs par défaut ici", obj.hotkeysEnabled, true)
+obj.hotkeys = {}
+obj:bindHotkeys(MAP)
+R.check("les quatre actions liées", nb(), 4)
+obj:setHotkeysEnabled(false)
+R.check("désactivation délie tout", nb(), 0)
+obj:setHotkeysEnabled(true)
+R.check("réactivation sans repasser par bindHotkeys", nb(), 4)
+obj:bindHotkeys({ toggle = MAP.toggle })
+R.check("seules les actions déclarées", nb(), 1)
+R.check("action absente non liée", obj.hotkeys.test, nil)
+obj:bindHotkeys(MAP)
+
+R.section("Le curseur ne saute pas en arrière")
+obj.isMouseEnabled = function() return true end
+obj.mouseMovePixels = 1
+obj.returnMouseTimer = nil
+local pos = { x = 100, y = 200 }
+hs.mouse.absolutePosition = function(p) if p then pos = { x=p.x, y=p.y } end return { x=pos.x, y=pos.y } end
+ctl.timers = {}
+obj:sendMouseActivity()
+R.check("curseur déplacé", pos.x, 101)
+ctl.fireTimers()
+R.check("curseur ramené si personne n'y a touché", pos.x, 100)
+
+-- l'utilisateur bouge la souris pendant le délai de retour
+obj.returnMouseTimer = nil
+pos = { x = 500, y = 600 }
+ctl.timers = {}
+obj:sendMouseActivity()
+pos = { x = 900, y = 400 }        -- mouvement réel de l'utilisateur
+ctl.fireTimers()
+R.check("le curseur reste là où l'utilisateur l'a mis (x)", pos.x, 900)
+R.check("le curseur reste là où l'utilisateur l'a mis (y)", pos.y, 400)
 
 R.finish()

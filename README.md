@@ -9,6 +9,8 @@ Modules [Hammerspoon](https://www.hammerspoon.org), chargés et pilotés par
 | [ActivityKeeper](ActivityKeeper.spoon/) | maintien de présence, avec réduction de consommation en veille |
 | [LastWindowQuits](LastWindowQuits.spoon/) | ferme une application quand sa dernière fenêtre est fermée |
 | [WireGuardVPN](WireGuardVPN.spoon/) | connexion WireGuard depuis la barre des menus |
+| [FinderCutPaste](FinderCutPaste.spoon/) | couper/coller de fichiers dans le Finder, façon Windows |
+| [FinderPermanentDelete](FinderPermanentDelete.spoon/) | Maj+Suppr = suppression définitive dans le Finder |
 
 ## Installation
 
@@ -29,7 +31,7 @@ Chaque Spoon expose sa configuration en tête de fichier, sous
 
 ## Tests
 
-226 cas, exécutables sans Hammerspoon — voir [tests/](tests/).
+251 cas, exécutables sans Hammerspoon — voir [tests/](tests/).
 
 ```bash
 sh tests/run-all.sh

@@ -2,7 +2,7 @@
 --
 -- ActivityKeeper Spoon
 --
--- Version : 4.12.0
+-- Version : 4.13.0
 --
 ------------------------------------------------------------
 --
@@ -146,7 +146,7 @@ obj.__index = obj
 
 obj.name = "ActivityKeeper"
 
-obj.version = "4.12.0"
+obj.version = "4.13.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -278,6 +278,13 @@ obj.screenBrightnessTarget = 0.15
 -- Icône dans la barre des menus. Le menu reste joignable via le
 -- sous-menu de SpoonManager, qui sait la réafficher.
 obj.showMenuBar = true
+
+-- Raccourcis clavier.
+--
+-- true par defaut, contrairement a LastWindowQuits : le raccourci de
+-- bascule existe et sert depuis longtemps ici, le passer a false le
+-- couperait sans prevenir.
+obj.hotkeysEnabled = true
 
 obj.showStateNotifications = true
 
@@ -417,6 +424,10 @@ obj.fastReturnWatcher =
 
 
 obj.menuBar =
+    nil
+
+
+obj.hotkeyMapping =
     nil
 
 
@@ -2271,6 +2282,13 @@ function obj:sendMouseActivity()
                 -- Retour
                 ------------------------------------------------
 
+                if self.returnMouseTimer then
+
+                    self.returnMouseTimer:stop()
+
+                end
+
+
                 self.returnMouseTimer =
 
                     hs.timer.doAfter(
@@ -2278,6 +2296,37 @@ function obj:sendMouseActivity()
                         self.mouseReturnDelay,
 
                         function()
+
+                            self.returnMouseTimer =
+                                nil
+
+
+                            ------------------------------------
+                            -- Si le curseur n'est plus la ou
+                            -- nous l'avons laisse, l'utilisateur
+                            -- l'a bouge entre-temps : le ramener
+                            -- le teleporterait en arriere.
+                            ------------------------------------
+
+                            local currentPosition =
+                                hs.mouse.absolutePosition()
+
+
+                            if not currentPosition
+                                or math.abs(
+                                    currentPosition.x
+                                    - temporaryPosition.x
+                                ) > 1
+                                or math.abs(
+                                    currentPosition.y
+                                    - temporaryPosition.y
+                                ) > 1 then
+
+
+                                return
+
+                            end
+
 
                             hs.eventtap.event.newMouseEvent(
 
@@ -6836,15 +6885,46 @@ end
 -- HOTKEYS
 ------------------------------------------------------------
 
-function obj:bindHotkeys(mapping)
+function obj:hotkeyActions()
 
-    --------------------------------------------------------
-    -- Nettoyage existant
-    --------------------------------------------------------
+    return {
+
+        toggle = function()
+
+            self:toggle()
+
+        end,
+
+        menu = function()
+
+            self:showMenu()
+
+        end,
+
+        status = function()
+
+            self:showToast(
+                "Activity Keeper : "
+                .. self:getStateLabel()
+            )
+
+        end,
+
+        test = function()
+
+            self:testKeepAlive()
+
+        end,
+
+    }
+
+end
+
+
+function obj:deleteHotkeys()
 
     for _, hotkey
         in pairs(self.hotkeys) do
-
 
         if hotkey then
 
@@ -6859,36 +6939,113 @@ function obj:bindHotkeys(mapping)
         {}
 
 
-    --------------------------------------------------------
-    -- TOGGLE
-    --------------------------------------------------------
+    return self
 
-    if mapping
-        and mapping.toggle
-        and mapping.toggle[1]
-        and mapping.toggle[2] then
+end
 
 
-        self.hotkeys.toggle =
+function obj:applyHotkeys()
 
-            hs.hotkey.bind(
+    self:deleteHotkeys()
 
-                mapping.toggle[1],
 
-                mapping.toggle[2],
+    if not self.hotkeysEnabled then
 
-                function()
+        self:log(
+            "Raccourcis clavier désactivés"
+        )
 
-                    self:toggle()
 
-                end
-
-            )
+        return self
 
     end
 
 
+    if not self.hotkeyMapping then
+
+        return self
+
+    end
+
+
+    local bound =
+        0
+
+
+    for name, action
+        in pairs(self:hotkeyActions()) do
+
+        local binding =
+            self.hotkeyMapping[name]
+
+
+        if binding
+            and binding[1]
+            and binding[2] then
+
+            self.hotkeys[name] =
+                hs.hotkey.bind(
+                    binding[1],
+                    binding[2],
+                    action
+                )
+
+
+            bound =
+                bound + 1
+
+        end
+
+    end
+
+
+    self:log(
+        "Raccourcis clavier liés : "
+        .. tostring(bound)
+    )
+
+
     return self
+
+end
+
+
+function obj:bindHotkeys(mapping)
+
+    -- Le mapping est memorise et non consomme : desactiver puis
+    -- reactiver les raccourcis les relie sans repasser par init.lua.
+
+    self.hotkeyMapping =
+        mapping
+
+
+    return self:applyHotkeys()
+
+end
+
+
+function obj:setHotkeysEnabled(enabled)
+
+    self.hotkeysEnabled =
+        enabled == true
+
+
+    self:applyHotkeys()
+
+
+    self:updateMenuBar()
+
+
+    return self
+
+end
+
+
+function obj:toggleHotkeys()
+
+    return self:setHotkeysEnabled(
+        not self.hotkeysEnabled
+    )
 
 end
 
@@ -7072,21 +7229,7 @@ function obj:stop()
     -- Hotkeys
     --------------------------------------------------------
 
-    for _, hotkey
-        in pairs(self.hotkeys) do
-
-
-        if hotkey then
-
-            hotkey:delete()
-
-        end
-
-    end
-
-
-    self.hotkeys =
-        {}
+    self:deleteHotkeys()
 
 
     --------------------------------------------------------

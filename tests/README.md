@@ -18,6 +18,7 @@ lua tests/lwq_config.lua LastWindowQuits.spoon/init.lua   # une seule suite
 | `lwq_windows`    | LastWindowQuits | comptage des fenêtres, réduction, `windowRejected`, coût du scan |
 | `lwq_securite`   | LastWindowQuits | veille et verrouillage, arrêt du Spoon, application terminée |
 | `lwq_config`     | LastWindowQuits | autorité de `init.lua`, menu sans icône, raccourcis |
+| `finder_cutpaste`| FinderCutPaste  | marqueur de copie synthétique, indicateur ciseaux |
 | `sm_menu`        | SpoonManager    | sous-menu d'icône, accesseurs |
 | `sm_robustesse`  | SpoonManager    | entrées mal formées, échecs de démarrage, `stop()` |
 

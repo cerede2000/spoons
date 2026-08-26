@@ -11,6 +11,7 @@ for pair in \
     "lwq_windows:LastWindowQuits.spoon/init.lua" \
     "lwq_securite:LastWindowQuits.spoon/init.lua" \
     "lwq_config:LastWindowQuits.spoon/init.lua" \
+    "finder_cutpaste:FinderCutPaste.spoon/init.lua" \
     "sm_menu:SpoonManager.spoon/init.lua" \
     "sm_robustesse:SpoonManager.spoon/init.lua" ; do
     suite=${pair%%:*}; target=${pair#*:}
