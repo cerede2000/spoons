@@ -554,8 +554,12 @@ helper.
 ### Reconstruire le binaire
 
 ```bash
-swiftc -O window-capture-helper.swift -o window-capture-helper
+./build-helper.sh
 ```
+
+Le script compile le binaire simple et celui du bundle `.app`, signe le
+bundle, et depose l'empreinte de la source compilee dans
+`window-capture-helper.sha256`.
 
 Le binaire est signe ad hoc, donc chaque compilation change son
 `cdhash`. **Avec `helperLaunchMode = "task"`, cela n'a plus
@@ -569,10 +573,19 @@ et il faut la reaccorder apres chaque compilation.
 Le binaire compile et le bundle `.app` ne sont pas versionnes ici : la
 signature ad hoc est propre a la machine qui l'a produite.
 
-Le Spoon compare au demarrage la date du `.swift` et celle du binaire en
-service, et journalise un avertissement si la source est plus recente :
-un durcissement ecrit dans le `.swift` ne doit pas donner l'illusion
-d'etre actif.
+Au demarrage, le Spoon compare l'empreinte de la source presente a celle
+deposee a la compilation : un durcissement ecrit dans le `.swift` ne
+doit pas donner l'illusion d'etre actif.
+
+La comparaison portait auparavant sur les **dates de modification**.
+C'etait un mauvais juge : copier le Spoon suffisait a rendre le `.swift`
+plus recent que le binaire sans qu'une seule ligne ait change, et
+l'avertissement reclamait alors une recompilation pour rien. Ce qui
+compte est le contenu, pas la date.
+
+Sans empreinte deposee — installation anterieure a `build-helper.sh` —
+le Spoon retombe sur les dates, en signalant que le constat peut venir
+d'une simple copie.
 
 Compiler avec `-parse-as-library`, le fichier utilisant `@main` :
 

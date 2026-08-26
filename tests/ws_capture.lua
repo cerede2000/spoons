@@ -534,12 +534,55 @@ R.check("mais il est signalé",
     table.concat(ctl.printed, " "):find("laisse en place", 1, true) ~= nil, true)
 obj.screenCaptureSessionBaseDirectory = BASE
 
-R.section("Un binaire de helper périmé est signalé")
+R.section("Un binaire de helper périmé est reconnu à l'empreinte")
+-- Comparer les dates était un mauvais juge : copier le Spoon suffisait
+-- à rendre le .swift plus récent que le binaire sans qu'une ligne ait
+-- changé, et l'avertissement réclamait alors une recompilation — et en
+-- mode « open » une réautorisation d'Enregistrement de l'écran — pour
+-- rien. Ce qui compte est le contenu.
 reset()
-ctl.files["/fake/src.swift"] = { data = "", mtime = 100 }
 local vraiSource = obj.helperSourcePath
+local vraiStamp  = obj.helperStampPath
 obj.helperSourcePath = function() return "/fake/src.swift" end
+obj.helperStampPath  = function() return "/fake/src.sha256" end
+local SOURCE = "let x = 1"
+local EMPREINTE = ("%064x"):format(#SOURCE)   -- ce que rend le bouchon SHA256
+
+ctl.files["/fake/src.swift"]  = { data = SOURCE, mtime = 300 }
+ctl.files["/fake/src.sha256"] = { data = EMPREINTE .. "\n", mtime = 1 }
 ctl.files[HELPER].mtime = 200
+ctl.printed = {}
+R.check("empreinte concordante : rien à signaler, malgré les dates",
+    obj:checkHelperFreshness(), true)
+R.check("aucun message", #ctl.printed, 0)
+
+ctl.files["/fake/src.swift"].data = "let x = 1 -- modifie"
+ctl.printed = {}
+R.check("source modifiée : signalé", obj:checkHelperFreshness(), false)
+R.check("le message dit quoi faire",
+    table.concat(ctl.printed, " "):find("build-helper.sh", 1, true) ~= nil, true)
+
+R.section("La perte d'autorisation n'est annoncée que si elle a lieu")
+-- En mode « task » le service hérite de l'autorisation de Hammerspoon :
+-- une recompilation ne coûte rien. Le dire quand même envoyait
+-- l'utilisateur réaccorder Enregistrement de l'écran sans raison.
+local vraiMode = obj.helperLaunchMode
+obj.helperLaunchMode = "task"
+ctl.printed = {}
+obj:checkHelperFreshness()
+R.check("mode task : rien sur l'autorisation",
+    table.concat(ctl.printed, " "):find("Enregistrement de l'ecran", 1, true) ~= nil, false)
+
+obj.helperLaunchMode = "open"
+ctl.printed = {}
+obj:checkHelperFreshness()
+R.check("mode open : l'autorisation est bien annoncée",
+    table.concat(ctl.printed, " "):find("Enregistrement de l'ecran", 1, true) ~= nil, true)
+obj.helperLaunchMode = vraiMode
+
+R.section("Sans empreinte déposée, on retombe sur les dates en le disant")
+ctl.files["/fake/src.sha256"] = nil
+ctl.files["/fake/src.swift"].mtime = 100
 ctl.printed = {}
 R.check("binaire plus récent : rien à signaler", obj:checkHelperFreshness(), true)
 R.check("aucun message", #ctl.printed, 0)
@@ -547,11 +590,11 @@ R.check("aucun message", #ctl.printed, 0)
 ctl.files["/fake/src.swift"].mtime = 300
 ctl.printed = {}
 R.check("source plus récente : signalé", obj:checkHelperFreshness(), false)
-R.check("le message dit quoi faire",
-    table.concat(ctl.printed, " "):find("Recompiler", 1, true) ~= nil, true)
-R.check("et prévient de la perte d'autorisation",
-    table.concat(ctl.printed, " "):find("Enregistrement de l'ecran", 1, true) ~= nil, true)
+R.check("mais le doute est annoncé comme tel",
+    table.concat(ctl.printed, " "):find("simple copie", 1, true) ~= nil, true)
+
 obj.helperSourcePath = vraiSource
+obj.helperStampPath  = vraiStamp
 ctl.files[HELPER].mtime = 1
 
 ------------------------------------------------------------

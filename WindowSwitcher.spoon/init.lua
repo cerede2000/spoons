@@ -1132,6 +1132,69 @@ function obj:helperSourcePath()
 end
 
 
+-- Empreinte de la source telle qu'elle etait au moment de la
+-- compilation, deposee par build-helper.sh a cote du binaire.
+
+function obj:helperStampPath()
+
+    local path =
+        self:getSpoonDirectory()
+
+
+    if path then
+
+        return path .. "/window-capture-helper.sha256"
+
+    end
+
+
+    return nil
+
+end
+
+
+function obj:readTextFile(path)
+
+    if not path then
+
+        return nil
+
+    end
+
+
+    local file =
+        io.open(path, "r")
+
+
+    if not file then
+
+        return nil
+
+    end
+
+
+    local contents =
+        file:read("*a")
+
+
+    file:close()
+
+
+    return contents
+
+end
+
+
+-- La comparaison des dates de modification etait un mauvais juge.
+-- Copier le Spoon suffisait a rendre le .swift plus recent que le
+-- binaire, sans qu'une seule ligne ait change : l'avertissement
+-- reclamait alors une recompilation -- et, en mode "open", une
+-- reautorisation d'Enregistrement de l'ecran -- pour rien.
+--
+-- Ce qui compte n'est pas la date mais le contenu. build-helper.sh
+-- depose l'empreinte de la source compilee ; une copie l'emporte avec
+-- elle, une vraie modification la contredit.
+
 function obj:checkHelperFreshness()
 
     local sourcePath =
@@ -1149,6 +1212,65 @@ function obj:checkHelperFreshness()
     end
 
 
+    local source =
+        self:readTextFile(sourcePath)
+
+
+    if not source then
+
+        return true
+
+    end
+
+
+    local empreinte =
+        safeCall(function()
+
+            return hash.SHA256(source)
+
+        end)
+
+
+    local depose =
+        self:readTextFile(self:helperStampPath())
+
+
+    if depose then
+
+        depose =
+            depose:match("^%s*(%x+)")
+
+    end
+
+
+    if depose and empreinte then
+
+        if depose:lower() == empreinte:lower() then
+
+            return true
+
+        end
+
+
+        self:log(
+            "ATTENTION : window-capture-helper.swift a change depuis la "
+            .. "compilation du binaire en service. Les corrections de la "
+            .. "source ne sont pas actives. Relancer build-helper.sh."
+            .. (self.helperLaunchMode == "open"
+                and " En mode \"open\", reaccorder ensuite Enregistrement"
+                    .. " de l'ecran : la signature change."
+                or "")
+        )
+
+
+        return false
+
+    end
+
+
+    -- Pas d'empreinte deposee : installation anterieure a
+    -- build-helper.sh. On retombe sur les dates, en le disant.
+
     local sourceTime =
         fs.attributes(sourcePath, "modification")
 
@@ -1157,14 +1279,7 @@ function obj:checkHelperFreshness()
         fs.attributes(binaryPath, "modification")
 
 
-    if not sourceTime or not binaryTime then
-
-        return true
-
-    end
-
-
-    if sourceTime <= binaryTime then
+    if not sourceTime or not binaryTime or sourceTime <= binaryTime then
 
         return true
 
@@ -1172,10 +1287,10 @@ function obj:checkHelperFreshness()
 
 
     self:log(
-        "ATTENTION : window-capture-helper.swift est plus recent que le "
-        .. "binaire en service. Les corrections de la source ne sont pas "
-        .. "actives. Recompiler avec swiftc, puis reaccorder "
-        .. "Enregistrement de l'ecran (la signature change)."
+        "window-capture-helper.swift porte une date plus recente que le "
+        .. "binaire. Aucune empreinte n'ayant ete deposee, ce constat "
+        .. "peut venir d'une simple copie. Relancer build-helper.sh "
+        .. "leve le doute."
     )
 
 
