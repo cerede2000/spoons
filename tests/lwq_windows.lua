@@ -27,7 +27,11 @@ R.check("nil",                              obj:isCountableWindow(nil), false)
 R.section("countWindows distingue zéro et inconnu")
 local app = lib.app(ctl, {name="App", bundle="com.t.app", windows={W{id=1}}})
 ctl.axMode="ok";     R.check("une fenêtre",              obj:countWindows(app), 1)
-ctl.axMode="vide";   R.check("aucune fenêtre : 0",       obj:countWindows(app), 0)
+-- un zéro isolé ne conclut plus : il faut quitConfirmations observations
+ctl.axMode="vide"
+R.check("premier zéro : indécidable", obj:countWindows(app), nil)
+for _ = 2, obj.quitConfirmations - 1 do obj:countWindows(app) end
+R.check("aucune fenêtre, une fois confirmé : 0", obj:countWindows(app), 0)
 ctl.axMode="erreur"; R.check("AX muette : nil, pas 0",   obj:countWindows(app), nil)
 ctl.axMode="ok";     R.check("application absente : nil", obj:countWindows(nil), nil)
 
@@ -89,13 +93,16 @@ obj:onWindowDestroyed(win, "Notes")
 obj:onWindowRejected(win, "Notes")
 R.check("un seul recomptage programmé", #ctl.timers, 1)
 ctl.fireOnly(obj.windowRemovalRecheckDelay)
-obj.windowCounts = { ["com.t.notes"] = 1 }
-obj:scanWindowTransitions(false)
+-- il faut quitConfirmations observations à zéro pour conclure
+for _ = 1, obj.quitConfirmations do
+    obj.windowCounts = { ["com.t.notes"] = 1 }
+    obj:scanWindowTransitions(false)
+end
 local armed, pending = 0, nil
 for _, p in pairs(obj.pendingQuits) do armed = armed + 1; pending = p end
 R.check("un seul quit armé", armed, 1)
 R.check("délai ancré sur la première détection", pending and pending.startedAt, 1000)
-R.check("pid mémorisé pour l'annulation", pending and pending.pid, 4242)
+R.check("pid mémorisé pour l'annulation", pending and pending.pid ~= nil, true)
 
 R.section("Coût du scan : deux vitesses")
 -- 3 applications avec fenêtres, 2 sans, 20 daemons
@@ -149,7 +156,8 @@ ctl.runningApps[1]._windows = {}
 obj.seenApps={["com.safari"]=true}
 obj.startupGracePeriod=0; obj.startedAt=0; obj.quitDelay=5
 ctl.timers={}; ctl.killed={}
-obj:scanWindowTransitions(false)
+-- le scan conclut au bout de quitConfirmations passages
+for _ = 1, obj.quitConfirmations do obj:scanWindowTransitions(false) end
 local armed=0 for _ in pairs(obj.pendingQuits) do armed=armed+1 end
 R.check("fermeture détectée par un tick partiel", armed, 1)
 
@@ -182,7 +190,8 @@ R.check("comptage indécidable, pas zéro", obj:countWindows(surAutreEspace), ni
 local vraimentVide = lib.app(ctl, {
     name = "Vide", bundle = "com.exemple.vide", windows = {},
 })
-R.check("une application réellement sans fenêtre compte zéro",
+for _ = 1, obj.quitConfirmations - 1 do obj:countWindows(vraimentVide) end
+R.check("une application réellement sans fenêtre compte zéro, une fois confirmé",
     obj:countWindows(vraimentVide), 0)
 
 local avecFenetre = lib.app(ctl, {
@@ -208,116 +217,66 @@ R.check("indécidable plutôt que zéro", obj:countWindows(muette), nil)
 
 
 ------------------------------------------------------------
-R.section("Le WindowServer voit ce que l'accessibilité ne voit plus")
--- Dernier recours, et le seul qui ne passe pas par l'accessibilité :
--- hs.spaces.windowSpaces() dit sur quels bureaux se trouve une fenêtre
--- donnée. Il reste debout quand allWindows() et mainWindow() se taisent
--- tous les deux, ce qui arrive quand une autre application est en plein
--- écran.
+R.section("Un zéro isolé ne suffit pas à conclure")
+-- Mesuré sur macOS 26 : le WindowServer garde une fenêtre fermée
+-- exactement comme une vivante tant que son application tourne, donc il
+-- ne peut pas servir de test d'existence. Ce qui reste sûr : un
+-- aveuglement de l'accessibilité dure quelques secondes, une fermeture
+-- est définitive. On demande plusieurs zéros de suite.
 ------------------------------------------------------------
-local sonde = lib.window({ id = 1 })
-ctl.frontmostWindow = sonde
-ctl.windowSpaces = { [1] = { 1 } }          -- la sonde existe
-obj.spacesAvailable = nil
-
-local ailleurs = lib.app(ctl, { name = "Notes", bundle = "com.apple.Notes",
-                                windows = { lib.window({ id = 700 }) }, pid = 7000 })
-R.check("comptage normal, identifiants relevés", obj:countWindows(ailleurs), 1)
-R.check("l'identifiant est mémorisé", obj.knownWindowIDs[7000][1], 700)
-
--- l'application passe sur un autre bureau : plus rien côté accessibilité
-ailleurs._windows = {}
-ailleurs.mainWindow = function() return nil end
-ctl.windowSpaces[700] = { 3 }               -- mais le WindowServer la voit
-R.check("indécidable, pas zéro", obj:countWindows(ailleurs), nil)
-
-R.section("Une fenêtre réellement fermée compte bien zéro")
-ctl.windowSpaces[700] = nil                 -- le WindowServer ne la voit plus
-R.check("zéro", obj:countWindows(ailleurs), 0)
-R.check("l'identifiant périmé est oublié", obj.knownWindowIDs[7000], nil)
-
-R.section("Sans identifiants relevés, rien à recouper")
-local jamaisVue = lib.app(ctl, { name = "Neuve", bundle = "com.x",
-                                 windows = {}, pid = 7001 })
-jamaisVue.mainWindow = function() return nil end
-R.check("zéro", obj:countWindows(jamaisVue), 0)
-
-R.section("Une API d'espaces absente ne bloque pas le comptage")
-ctl.spacesBroken = true
-obj.spacesAvailable = nil
-local autre = lib.app(ctl, { name = "Autre", bundle = "com.y",
-                             windows = { lib.window({ id = 800 }) }, pid = 7002 })
-obj:countWindows(autre)
-autre._windows = {}
-autre.mainWindow = function() return nil end
-R.check("zéro conservé", obj:countWindows(autre), 0)
-ctl.spacesBroken = false
-
-R.section("Le recoupement se désactive")
-obj.useSpacesCrossCheck = false
-obj.spacesAvailable = nil
-R.check("plus de sondage", obj:spacesCrossCheckAvailable(), false)
-obj.useSpacesCrossCheck = true
-
-R.section("Un échec de sondage n'est pas retenu définitivement")
-obj.spacesAvailable = nil
-ctl.frontmostWindow = nil
-R.check("indisponible pour l'instant", obj:spacesCrossCheckAvailable(), false)
-R.check("rien n'est gravé", obj.spacesAvailable, nil)
-ctl.frontmostWindow = sonde
-R.check("disponible dès que la sonde répond", obj:spacesCrossCheckAvailable(), true)
-
-
-------------------------------------------------------------
-R.section("Le recoupement ne peut pas bloquer indéfiniment")
--- Les identifiants relevés ne sont oubliés qu'une fois le comptage
--- conclu à zéro — et ce comptage était justement empêché par eux.
--- Une application dont la fenêtre venait d'être fermée ne se fermait
--- alors plus jamais : IINA tournait en boucle.
-------------------------------------------------------------
-ctl.frontmostWindow = sonde
-ctl.windowSpaces = { [1] = { 1 } }
-obj.spacesAvailable = nil
 obj.undecidable = {}
 obj.undecidableSince = {}
+obj.zeroStreak = {}
+obj.quitConfirmations = 3
 
-local bloquee = lib.app(ctl, { name = "IINA", bundle = "com.colliderli.iina",
-                               windows = { lib.window({ id = 1634 }) }, pid = 9000 })
-R.check("comptage normal", obj:countWindows(bloquee), 1)
+local cible = lib.app(ctl, { name = "IINA", bundle = "com.colliderli.iina",
+                             windows = { lib.window({ id = 1600 }) }, pid = 9100 })
+R.check("comptage normal", obj:countWindows(cible), 1)
 
--- fenêtre fermée côté accessibilité, mais le WindowServer la voit encore
-bloquee._windows = {}
-bloquee.mainWindow = function() return nil end
-ctl.windowSpaces[1634] = { 7 }
-R.check("d'abord indécidable, c'est le but", obj:countWindows(bloquee), nil)
-R.check("l'instant est mémorisé", obj.undecidableSince[9000] ~= nil, true)
+cible._windows = {}
+cible.mainWindow = function() return nil end
+R.check("premier zéro : indécidable", obj:countWindows(cible), nil)
+R.check("deuxième zéro : toujours", obj:countWindows(cible), nil)
+R.check("troisième zéro : conclu", obj:countWindows(cible), 0)
 
-ctl.now = ctl.now + 5
-R.check("toujours indécidable dans le délai", obj:countWindows(bloquee), nil)
+R.section("Une fenêtre qui réapparaît remet la série à zéro")
+cible._windows = { lib.window({ id = 1601 }) }
+R.check("comptage normal", obj:countWindows(cible), 1)
+R.check("série effacée", obj.zeroStreak[9100], nil)
+cible._windows = {}
+R.check("il faut tout recommencer", obj:countWindows(cible), nil)
 
-ctl.now = ctl.now + obj.spacesGraceSeconds + 1
+R.section("La garde mainWindow tient toujours")
+obj.zeroStreak = {}
+local ailleurs = lib.app(ctl, { name = "Claude", bundle = "com.anthropic.x",
+                                windows = {}, pid = 9200,
+                                hiddenBySpace = lib.window({ id = 1700 }) })
+R.check("indécidable tant que la fenêtre principale répond",
+    obj:countWindows(ailleurs), nil)
+for _ = 1, 5 do obj:countWindows(ailleurs) end
+R.check("et elle ne cède pas à la répétition", obj:countWindows(ailleurs), nil)
+
+R.section("Mais elle ne bloque pas indéfiniment")
+ctl.now = ctl.now + obj.undecidableGraceSeconds + 1
 ctl.printed = {}
-R.check("passé le délai, l'accessibilité tranche", obj:countWindows(bloquee), 0)
+R.check("passé le délai, la liste fait foi", obj:countWindows(ailleurs), nil)
 R.check("l'abandon est journalisé",
-    table.concat(ctl.printed, " "):find("Recoupement abandonne", 1, true) ~= nil, true)
-R.check("les identifiants périmés sont oubliés", obj.knownWindowIDs[9000], nil)
-
-R.section("Un comptage réussi remet les compteurs à zéro")
-bloquee._windows = { lib.window({ id = 1700 }) }
-R.check("comptage normal", obj:countWindows(bloquee), 1)
-R.check("plus d'instant d'indécision", obj.undecidableSince[9000], nil)
-R.check("plus de motif retenu", obj.undecidable[9000], nil)
+    table.concat(ctl.printed, " "):find("Doute abandonne", 1, true) ~= nil, true)
+R.check("puis la série de confirmations reprend la main",
+    obj:countWindows(ailleurs), nil)
 
 R.section("Le journal ne se répète pas")
-bloquee._windows = {}
-bloquee.mainWindow = function() return nil end
-ctl.windowSpaces[1700] = { 7 }
+obj.undecidable = {}
+obj.undecidableSince = {}
+obj.zeroStreak = {}
+local muette2 = lib.app(ctl, { name = "Muette", bundle = "com.z", windows = {}, pid = 9300 })
+muette2.mainWindow = function() return nil end
 ctl.printed = {}
-for _ = 1, 5 do obj:countWindows(bloquee) end
-local repetitions = 0
+for _ = 1, 2 do obj:countWindows(muette2) end
+local lignes = 0
 for _, l in ipairs(ctl.printed) do
-    if l:find("Comptage indecidable", 1, true) then repetitions = repetitions + 1 end
+    if l:find("Comptage indecidable", 1, true) then lignes = lignes + 1 end
 end
-R.check("une seule ligne pour cinq comptages", repetitions, 1)
+R.check("deux confirmations, deux motifs distincts, deux lignes", lignes, 2)
 
 R.finish()

@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.13.0"
+obj.version = "1.14.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -233,17 +233,26 @@ obj.seenApps =
     {}
 
 
--- Recoupement par les espaces. hs.spaces interroge le WindowServer et
--- ne depend pas de l'accessibilite : c'est la seule source qui voit
--- encore les fenetres d'une application posee sur un autre bureau.
-obj.useSpacesCrossCheck = true
+-- Le WindowServer ne sait pas repondre a la question qu'on lui posait.
+-- Mesure faite sur macOS 26, une fenetre ouverte puis fermee dans une
+-- application qui continue de tourner :
+--
+--   ouverte  CGSCopySpacesForWindows [1]   CGWindowList presente
+--   fermee   CGSCopySpacesForWindows [1]   CGWindowList presente
+--   bidon    CGSCopySpacesForWindows []    CGWindowList absente
+--
+-- Une fenetre fermee est indiscernable d'une fenetre vivante tant que
+-- son application vit. C'est le meme constat que celui note dans le
+-- code d'AltTab. Le recoupement rendait donc certaines applications
+-- definitivement infermables, et il a ete retire.
+--
+-- Ce qui remplace : ne jamais conclure sur une seule observation. Un
+-- aveuglement de l'accessibilite dure quelques secondes, une fermeture
+-- reelle est definitive. On demande donc plusieurs zeros de suite.
+obj.quitConfirmations = 3
 
--- Identifiants des fenetres vues pour chaque processus, releves lors
--- des comptages reussis. Ils servent a demander au WindowServer si une
--- fenetre existe encore, quand l'accessibilite ne repond plus.
-obj.knownWindowIDs = {}
-
-obj.spacesAvailable = nil
+-- Zeros consecutifs observes, par processus.
+obj.zeroStreak = {}
 
 -- Applications actuellement indecidables, par processus. Sert a ne
 -- journaliser que les changements d'etat : sans cela, une application
@@ -254,16 +263,10 @@ obj.undecidable = {}
 -- Instant du passage a l'indecidable, par processus.
 obj.undecidableSince = {}
 
--- Le recoupement protege d'un aveuglement passager, pas d'une erreur
--- durable. Passe ce delai, on cesse de s'y fier et l'accessibilite
--- redevient seule juge.
---
--- Sans cette borne le refus pouvait s'auto-entretenir : les
--- identifiants releves ne sont oublies qu'une fois le comptage conclu a
--- zero, et ce comptage etait justement empeche par eux. Une
--- application dont la fenetre venait d'etre fermee ne se fermait alors
--- plus jamais.
-obj.spacesGraceSeconds = 30
+-- Filet derriere la garde mainWindow() : si l'accessibilite retournait
+-- indefiniment une fenetre principale perimee, l'application ne se
+-- fermerait jamais. Passe ce delai, on tranche.
+obj.undecidableGraceSeconds = 60
 
 obj.windowCounts =
     {}
@@ -1781,227 +1784,13 @@ end
 -- paraissaient vides. Les appelants doivent traiter nil comme une
 -- absence d'information, jamais comme une autorisation de fermer.
 
--- L'API des espaces s'appuie sur des fonctions privees du systeme :
--- elle peut disparaitre d'une version de macOS a l'autre. On la sonde
--- sur une fenetre dont on sait qu'elle existe, celle du premier plan.
---
--- Seul un succes est memorise : un echec peut n'etre que passager, et
--- le retenir reviendrait a se priver du recoupement pour toujours.
-
-function obj:spacesCrossCheckAvailable()
-
-    if not self.useSpacesCrossCheck then
-
-        return false
-
-    end
-
-
-    if self.spacesAvailable == true then
-
-        return true
-
-    end
-
-
-    if not hs.spaces
-        or type(hs.spaces.windowSpaces) ~= "function" then
-
-        return false
-
-    end
-
-
-    local okWindow,
-          window =
-        pcall(
-            function()
-
-                return hs.window.frontmostWindow()
-
-            end
-        )
-
-
-    if not okWindow or not window then
-
-        return false
-
-    end
-
-
-    local okID,
-          id =
-        pcall(
-            function()
-
-                return window:id()
-
-            end
-        )
-
-
-    if not okID or not id then
-
-        return false
-
-    end
-
-
-    local okSpaces,
-          spaces =
-        pcall(hs.spaces.windowSpaces, id)
-
-
-    if okSpaces
-        and type(spaces) == "table"
-        and #spaces > 0 then
-
-        self.spacesAvailable =
-            true
-
-    end
-
-
-    return self.spacesAvailable == true
-
-end
-
-
--- Identifiants des bureaux actuellement visibles, un par ecran.
--- Renvoie nil si la question n'a pas de reponse.
-
-function obj:activeSpaceIDs()
-
-    if not self:spacesCrossCheckAvailable()
-        or type(hs.spaces.activeSpaces) ~= "function" then
-
-        return nil
-
-    end
-
-
-    local ok,
-          parEcran =
-        pcall(hs.spaces.activeSpaces)
-
-
-    if not ok or type(parEcran) ~= "table" then
-
-        return nil
-
-    end
-
-
-    local actifs =
-        {}
-
-
-    local vus =
-        false
-
-
-    for _, spaceID in pairs(parEcran) do
-
-        if spaceID then
-
-            actifs[spaceID] =
-                true
-
-
-            vus =
-                true
-
-        end
-
-    end
-
-
-    if not vus then
-
-        return nil
-
-    end
-
-
-    return actifs
-
-end
-
-
--- Vrai lorsque toutes les fenetres connues d'un processus se trouvent
--- sur des bureaux qui ne sont pas affiches. Dans ce cas l'accessibilite
--- ne peut rien nous apprendre de fiable, et il n'y a pas lieu de la
--- questionner : on ne juge que ce qu'on peut voir.
-
-function obj:appIsOffActiveSpaces(pid)
-
-    local identifiants =
-        pid and self.knownWindowIDs[pid]
-
-
-    if not identifiants or #identifiants == 0 then
-
-        return false
-
-    end
-
-
-    local actifs =
-        self:activeSpaceIDs()
-
-
-    if not actifs then
-
-        return false
-
-    end
-
-
-    local vivantes =
-        0
-
-
-    for _, id in ipairs(identifiants) do
-
-        local ok,
-              spaces =
-            pcall(hs.spaces.windowSpaces, id)
-
-
-        if ok and type(spaces) == "table" and #spaces > 0 then
-
-            vivantes =
-                vivantes + 1
-
-
-            for _, spaceID in ipairs(spaces) do
-
-                if actifs[spaceID] then
-
-                    return false
-
-                end
-
-            end
-
-        end
-
-    end
-
-
-    return vivantes > 0
-
-end
-
-
 -- Journalise le passage a l'etat indecidable, puis se tait tant qu'il
 -- dure.
 
 -- Vrai tant que le recoupement garde le droit de bloquer une
 -- conclusion pour ce processus.
 
-function obj:crossCheckStillTrusted(pid, nom)
+function obj:undecidableStillTrusted(pid, nom)
 
     if not pid then
 
@@ -2021,7 +1810,7 @@ function obj:crossCheckStillTrusted(pid, nom)
     end
 
 
-    if (self:now() - depuis) <= (tonumber(self.spacesGraceSeconds) or 30) then
+    if (self:now() - depuis) <= (tonumber(self.undecidableGraceSeconds) or 60) then
 
         return true
 
@@ -2035,11 +1824,11 @@ function obj:crossCheckStillTrusted(pid, nom)
 
 
         self:log(
-            "Recoupement abandonne pour "
+            "Doute abandonne pour "
             .. tostring(nom)
             .. " apres "
-            .. tostring(self.spacesGraceSeconds)
-            .. " s : l'accessibilite redevient seule juge",
+            .. tostring(self.undecidableGraceSeconds)
+            .. " s : la liste de fenetres fait foi",
             true
         )
 
@@ -2085,34 +1874,6 @@ function obj:noteUndecidable(pid, nom, motif)
 
 
     return self
-
-end
-
-
--- Renvoie vrai, faux, ou nil quand la question reste sans reponse.
-
-function obj:windowExistsAcrossSpaces(id)
-
-    if not id or not self:spacesCrossCheckAvailable() then
-
-        return nil
-
-    end
-
-
-    local ok,
-          spaces =
-        pcall(hs.spaces.windowSpaces, id)
-
-
-    if not ok or type(spaces) ~= "table" then
-
-        return nil
-
-    end
-
-
-    return #spaces > 0
 
 end
 
@@ -2217,15 +1978,15 @@ function obj:countWindows(application)
 
         if pid then
 
-            self.knownWindowIDs[pid] =
-                identifiants
-
-
             self.undecidable[pid] =
                 nil
 
 
             self.undecidableSince[pid] =
+                nil
+
+
+            self.zeroStreak[pid] =
                 nil
 
         end
@@ -2288,23 +2049,7 @@ function obj:countWindows(application)
                 self:appInfoFromApplication(application)))
 
 
-        -- Avant toute autre consideration : si les fenetres connues de
-        -- cette application sont toutes sur des bureaux qui ne sont pas
-        -- affiches, l'accessibilite ne peut rien nous apprendre. On ne
-        -- juge que ce qu'on peut voir.
-
-        if self:crossCheckStillTrusted(pid, nom)
-            and self:appIsOffActiveSpaces(pid) then
-
-            self:noteUndecidable(pid, nom, "fenetres sur un autre bureau")
-
-
-            return nil
-
-        end
-
-
-        if mainWindow then
+        if mainWindow and self:undecidableStillTrusted(pid, nom) then
 
             self:noteUndecidable(
                 pid,
@@ -2324,32 +2069,41 @@ function obj:countWindows(application)
         -- relevees existe encore quelque part, l'application n'a pas
         -- perdu sa derniere fenetre, quoi qu'en dise l'accessibilite.
 
-        if self:crossCheckStillTrusted(pid, nom) then
-
-            for _, id in ipairs((pid and self.knownWindowIDs[pid]) or {}) do
-
-                if self:windowExistsAcrossSpaces(id) == true then
-
-                    self:noteUndecidable(
-                        pid,
-                        nom,
-                        "le WindowServer voit encore la fenetre " .. tostring(id)
-                    )
-
-
-                    return nil
-
-                end
-
-            end
-
-        end
-
+        -- Un zero isole ne prouve rien : l'accessibilite peut etre
+        -- momentanement aveugle, ce qui arrive des qu'une autre
+        -- application passe en plein ecran. Une fermeture reelle, elle,
+        -- est definitive. On attend donc plusieurs zeros de suite.
 
         if pid then
 
-            self.knownWindowIDs[pid] =
-                nil
+            local serie =
+                (self.zeroStreak[pid] or 0) + 1
+
+
+            self.zeroStreak[pid] =
+                serie
+
+
+            local requis =
+                math.max(1, tonumber(self.quitConfirmations) or 3)
+
+
+            if serie < requis then
+
+                self:noteUndecidable(
+                    pid,
+                    nom,
+                    string.format(
+                        "aucune fenetre vue, %d confirmation(s) sur %d",
+                        serie,
+                        requis
+                    )
+                )
+
+
+                return nil
+
+            end
 
 
             self.undecidable[pid] =

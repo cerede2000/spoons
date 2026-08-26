@@ -166,48 +166,48 @@ bureau. Toutes les autres se retrouvent sur d'autres bureaux, et
 > first refresh*
 
 Ce zero etait lu comme « derniere fenetre fermee », et l'application
-etait quittee sans que personne n'ait rien ferme. Trois barrieres le
-retiennent desormais, de la moins chere a la plus sure :
+etait quittee sans que personne n'ait rien ferme.
 
-1. **`mainWindow()`** — la voie qu'emprunte Hammerspoon lui-meme pour
-   rattraper ce cas. Tant qu'elle repond, un zero ne prouve rien.
+### Ce que le WindowServer ne peut pas nous dire
 
-2. **Le WindowServer** — `hs.spaces.windowSpaces()` dit sur quels
-   bureaux se trouve une fenetre donnee, **sans passer par
-   l'accessibilite**. Les identifiants des fenetres vues sont releves a
-   chaque comptage reussi ; si l'un d'eux existe encore quelque part,
-   l'application n'a pas perdu sa derniere fenetre.
+La tentation est d'aller demander au WindowServer, qui lui voit tous les
+bureaux. Mesure faite sur macOS 26, une fenetre ouverte puis fermee dans
+une application qui continue de tourner :
 
-3. **Le comptage rend `nil`** plutot que zero des qu'une de ces voies
-   dit le contraire. Un quit deja programme est annule a l'execution :
-   « comptage des fenetres indisponible ».
+| | `CGSCopySpacesForWindows` | `CGWindowListCreateDescription` |
+|---|---|---|
+| fenetre ouverte | `[1]` | presente |
+| **fenetre fermee** | `[1]` | **presente** |
+| identifiant bidon | `[]` | absente |
 
-L'API des espaces s'appuie sur des fonctions privees du systeme. Elle
-est sondee sur une fenetre dont on sait qu'elle existe, celle du premier
-plan ; seul un succes est memorise, un echec pouvant n'etre que
-passager. Si elle disparait d'une version de macOS, seule la deuxieme
-barriere tombe.
+**Une fenetre fermee est indiscernable d'une fenetre vivante** tant que
+son application vit. Le meme constat figure dans le code d'AltTab, qui
+en tire la meme conclusion : ce signal dit seulement « le WindowServer
+n'a pas oublie cet identifiant », ce qui est beaucoup plus faible.
 
-### Le recoupement ne peut pas bloquer indefiniment
+Une version l'a utilise comme preuve d'existence : certaines
+applications sont alors devenues definitivement infermables. Le
+recoupement a ete retire.
 
-Les identifiants releves ne sont oublies qu'une fois le comptage conclu
-a zero — et ce comptage etait justement empeche par eux. Une application
-dont la fenetre venait d'etre fermee ne se fermait alors plus jamais.
+### Ce qui reste sur
 
-Le recoupement protege d'un aveuglement passager, pas d'une erreur
-durable. Passe `spacesGraceSeconds`, il est abandonne pour cette
-application et l'accessibilite redevient seule juge :
+Deux choses, et elles n'ont besoin d'aucune API privee :
 
-```
-Recoupement abandonne pour IINA apres 30 s :
-l'accessibilite redevient seule juge
+1. **`mainWindow()`** — une fenetre retournee est une vraie fenetre.
+   Tant que cette voie repond, un zero ne prouve rien. Un filet de
+   `undecidableGraceSeconds` evite qu'une fenetre principale perimee ne
+   bloque une application pour toujours.
+
+2. **Ne jamais conclure sur une seule observation.** Un aveuglement de
+   l'accessibilite dure quelques secondes ; une fermeture est
+   definitive. Il faut `quitConfirmations` zeros de suite pour conclure.
+   Une seule fenetre revue remet la serie a zero.
+
+```lua
+spoon.LastWindowQuits.quitConfirmations = 3
+spoon.LastWindowQuits.undecidableGraceSeconds = 60
 ```
 
 Le passage a l'etat indecidable n'est journalise qu'une fois, pas a
 chaque scan : une application posee sur un autre bureau ecrivait sinon
 une ligne toutes les cinq secondes, indefiniment.
-
-```lua
-spoon.LastWindowQuits.useSpacesCrossCheck = false
-spoon.LastWindowQuits.spacesGraceSeconds = 30
-```

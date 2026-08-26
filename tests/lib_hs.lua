@@ -357,7 +357,11 @@ function M.app(ctl, opts)
     a.name       = function() if a._dead then ctl.deadCalls[#ctl.deadCalls+1]="name" return nil end return a._name end
     a.bundleID   = function() if a._dead then ctl.deadCalls[#ctl.deadCalls+1]="bundleID" return nil end return a._bundle end
     a.kind       = function() if a._dead then ctl.deadCalls[#ctl.deadCalls+1]="kind" return nil end return a._kind end
-    a.pid        = function() return opts.pid or 4242 end
+    -- Un pid distinct par application : plusieurs Spoons indexent leur
+    -- etat par pid, et un pid partage les ferait interferer.
+    M._pidSuivant = (M._pidSuivant or 4242) + 1
+    local pid = opts.pid or M._pidSuivant
+    a.pid        = function() return pid end
     a.allWindows = function()
         if a._dead then ctl.deadCalls[#ctl.deadCalls+1]="allWindows" return {} end
         ctl.axCalls = ctl.axCalls + 1

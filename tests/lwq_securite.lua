@@ -66,10 +66,19 @@ R.check("aucune fermeture pendant la reprise", #ctl.killed, 0)
 R.section("Non-régression : une fermeture légitime ferme bien")
 fresh({"Edge","Firefox"})
 ctl.runningApps[1]._windows = {}
-obj:scanWindowTransitions(false)
+-- il faut quitConfirmations observations à zéro pour conclure : un
+-- aveuglement passager de l'accessibilité ne doit pas suffire
+for _ = 1, obj.quitConfirmations do obj:scanWindowTransitions(false) end
 ctl.fireTimers()
 R.check("une application fermée", #ctl.killed, 1)
 R.check("la bonne", ctl.killed[1], "Edge")
+
+R.section("Une seule observation ne suffit pas")
+fresh({"Edge","Firefox"})
+ctl.runningApps[1]._windows = {}
+obj:scanWindowTransitions(false)
+ctl.fireTimers()
+R.check("rien de fermé sur un seul zéro", #ctl.killed, 0)
 
 R.section("AX en erreur : on ne conclut rien")
 fresh({"Edge","Firefox"})
