@@ -23,6 +23,8 @@ function M.install(opts)
         snapshotIDs = {}, snapshotFails = {}, tasks = {},
         files = {}, dirs = {}, removed = {}, launchedApps = {}, osExec = {},
         links = {}, uid = 501, windowSpaces = {}, spacesBroken = false,
+        activeSpaces = { ["ECRAN-1"] = 1 }, activeSpaceOnScreen = 1,
+        movedToSpace = {}, moveSucceeds = true, spaceCalls = 0,
         focused = {}, unminimized = {}, unhidden = {},
     }
 
@@ -148,7 +150,25 @@ function M.install(opts)
             -- disparue. ctl.spacesBroken simule une API indisponible.
             windowSpaces = function(id)
                 if ctl.spacesBroken then error("hs.spaces indisponible") end
+                ctl.spaceCalls = ctl.spaceCalls + 1
                 return ctl.windowSpaces[id]
+            end,
+            -- ctl.activeSpaces = { [UUID d'ecran] = identifiant d'espace }
+            activeSpaces = function()
+                if ctl.spacesBroken then error("hs.spaces indisponible") end
+                ctl.spaceCalls = ctl.spaceCalls + 1
+                return ctl.activeSpaces
+            end,
+            activeSpaceOnScreen = function()
+                if ctl.spacesBroken then error("hs.spaces indisponible") end
+                return ctl.activeSpaceOnScreen
+            end,
+            moveWindowToSpace = function(id, space)
+                if ctl.spacesBroken then error("hs.spaces indisponible") end
+                if not ctl.moveSucceeds then return nil, "plein ecran" end
+                table.insert(ctl.movedToSpace, { id = id, space = space })
+                ctl.windowSpaces[id] = { space }
+                return true
             end,
         },
         window = {

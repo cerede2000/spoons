@@ -45,6 +45,20 @@ local window =
 local windowFilter =
     require("hs.window.filter")
 
+-- hs.spaces repose sur les API privees de SkyLight. Une mise a jour de
+-- macOS peut le rendre indisponible du jour au lendemain : il est
+-- charge a part, et son absence retire seulement ce que les bureaux
+-- apportent. Le switcher continue de fonctionner sans.
+local spacesLoaded,
+      spaces =
+    pcall(require, "hs.spaces")
+
+if not spacesLoaded then
+
+    spaces = nil
+
+end
+
 local unpackTable =
     table.unpack or unpack
 
@@ -56,7 +70,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.17.2"
+obj.version = "0.18.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -171,7 +185,55 @@ obj.badges = {
             alpha = 0.97,
         },
     },
+    otherSpace = {
+        glyph = "⧉",
+        color = {
+            red = 0.10,
+            green = 0.68,
+            blue = 0.62,
+            alpha = 0.97,
+        },
+    },
 }
+
+-- Une vignette ne disait pas si sa fenetre se trouve sur le bureau
+-- courant. En plein ecran, ou avec plusieurs bureaux, la moitie de la
+-- grille pointait vers des fenetres invisibles ici sans que rien ne le
+-- signale.
+--
+-- Contrairement au test d'existence qui a echoue dans LastWindowQuits,
+-- l'appartenance d'une fenetre VIVANTE a un bureau est une reponse
+-- fiable : la question posee au WindowServer est ici « ou est cette
+-- fenetre », pas « existe-t-elle encore ». Le switcher ne liste que des
+-- fenetres vivantes.
+obj.showSpaceBadges = true
+
+-- Que faire quand la fenetre choisie est sur un autre bureau.
+--
+--   "switch" : ne rien forcer. macOS bascule de lui-meme vers le bureau
+--              de la fenetre quand son application est activee, avec
+--              l'animation native. La fenetre ne bouge pas.
+--
+--   "bring"  : amener la fenetre sur le bureau courant. Aucune
+--              animation, aucun detour par Mission Control -- c'est ce
+--              que fait Sanyam-G/switch via CGSMoveWindowsToManagedSpace,
+--              expose ici par hs.spaces.moveWindowToSpace. En echange,
+--              la fenetre change de bureau pour de bon.
+--
+-- hs.spaces.gotoSpace n'est volontairement pas utilise : il ouvre
+-- Mission Control et clique sur la vignette du bureau. Une demi-seconde
+-- d'animation visible a chaque Alt+Tab n'a pas sa place ici.
+obj.crossSpaceActivation = "switch"
+
+-- La bascule de bureau dure environ une demi-seconde. Verifier le focus
+-- plus tot le trouve force sur la mauvaise fenetre et declenche une
+-- reprise inutile en pleine animation.
+obj.crossSpaceFocusDelay = 0.7
+
+-- Grouper les fenetres du bureau courant avant les autres, en gardant
+-- l'ordre d'usage a l'interieur de chaque groupe. Desactive par defaut :
+-- l'ordre par usage recent reste le comportement attendu d'un Alt+Tab.
+obj.currentSpaceFirst = false
 
 -- Quelle application joue du son, laquelle capte le micro. L'inventaire
 -- vient du service, par l'API publique CoreAudio des objets de
@@ -702,6 +764,15 @@ obj.lastStepAt = nil
 obj.entries = nil
 
 obj.descriptorPass = nil
+
+-- Bureaux visibles au moment ou la session s'ouvre. Rafraichi une fois
+-- par session : pendant qu'on tient Alt, l'utilisateur ne change pas de
+-- bureau.
+obj.activeSpaceIDs = nil
+
+-- Faux des qu'un appel a hs.spaces a echoue : on cesse d'insister pour
+-- la session en cours.
+obj.spacesUsable = true
 
 obj.windowFilterInstance = nil
 
@@ -1431,6 +1502,282 @@ function obj:describeWindow(win)
 
 
     return descriptor
+
+end
+
+
+
+------------------------------------------------------------
+-- BUREAUX
+--
+-- Le WindowServer sait sur quels bureaux se trouve une fenetre. Mesure
+-- sur macOS 26, cette reponse est fiable pour une fenetre vivante, et
+-- elle ne l'est pas pour savoir si une fenetre existe encore : une
+-- fenetre fermee garde sa ligne tant que son application tourne. Le
+-- switcher ne pose que la premiere question.
+------------------------------------------------------------
+
+function obj:refreshActiveSpaces()
+
+    self.activeSpaceIDs =
+        nil
+
+
+    self.spacesUsable =
+        spaces ~= nil
+
+
+    if not self.spacesUsable
+        or not (self.showSpaceBadges
+            or self.currentSpaceFirst
+            or self.crossSpaceActivation == "bring") then
+
+        return self
+
+    end
+
+
+    local par_ecran =
+        safeCall(function()
+
+            return spaces.activeSpaces()
+
+        end)
+
+
+    if type(par_ecran) ~= "table" then
+
+        self.spacesUsable =
+            false
+
+
+        return self
+
+    end
+
+
+    local visibles =
+        {}
+
+
+    local compte =
+        0
+
+
+    for _, spaceID in pairs(par_ecran) do
+
+        if type(spaceID) == "number" then
+
+            visibles[spaceID] =
+                true
+
+
+            compte =
+                compte + 1
+
+        end
+
+    end
+
+
+    if compte == 0 then
+
+        return self
+
+    end
+
+
+    self.activeSpaceIDs =
+        visibles
+
+
+    return self
+
+end
+
+
+-- Bureau visible sur l'ecran qui a le clavier. C'est la destination
+-- naturelle d'une fenetre qu'on fait venir a soi.
+
+function obj:currentSpaceID()
+
+    if not spaces or not self.spacesUsable then
+
+        return nil
+
+    end
+
+
+    local spaceID =
+        safeCall(function()
+
+            return spaces.activeSpaceOnScreen()
+
+        end)
+
+
+    if type(spaceID) ~= "number" then
+
+        return nil
+
+    end
+
+
+    return spaceID
+
+end
+
+
+-- Renvoie true, false, ou nil quand la question n'a pas de reponse.
+-- Le resultat est memorise dans le descripteur : une session ne paie
+-- qu'une seule interrogation par fenetre.
+
+function obj:isOnOtherSpace(descriptor)
+
+    if not descriptor then
+
+        return nil
+
+    end
+
+
+    if descriptor.onOtherSpace ~= nil then
+
+        return descriptor.onOtherSpace
+
+    end
+
+
+    if not spaces
+        or not self.spacesUsable
+        or not self.activeSpaceIDs then
+
+        return nil
+
+    end
+
+
+    -- Une fenetre reduite ou masquee par Cmd+H n'est posee sur aucun
+    -- bureau visible. Repondre "autre bureau" serait exact au sens du
+    -- WindowServer et faux au sens de l'utilisateur : sa pastille dit
+    -- deja ce qu'il faut savoir.
+
+    if descriptor.minimized or descriptor.hidden then
+
+        descriptor.onOtherSpace =
+            false
+
+
+        return false
+
+    end
+
+
+    local liste =
+        safeCall(function()
+
+            return spaces.windowSpaces(descriptor.id)
+
+        end)
+
+
+    if type(liste) ~= "table" or #liste == 0 then
+
+        -- Pas de reponse, et ce cas est majoritaire. Sonde sur cette
+        -- machine, 40 fenetres relevees par CGWindowList :
+        --
+        --   Notes           wid=2035  spaces=204  -> autre bureau
+        --   Claude          wid=1441  spaces=1    -> bureau courant
+        --   Firefox, Edge, 1Password, panneaux... spaces=[] (vide)
+        --
+        -- Le WindowServer ne situe que les fenetres qui ont une
+        -- presence : les panneaux, les fenetres reduites et celles des
+        -- applications masquees repondent une liste vide. Les traiter
+        -- comme "ailleurs" aurait pastille presque toute la grille.
+        --
+        -- On tranche donc du cote qui n'invente rien : ni pastille, ni
+        -- deplacement, ni regroupement. Et on ne redemande pas pour
+        -- cette fenetre.
+
+        descriptor.onOtherSpace =
+            false
+
+
+        return false
+
+    end
+
+
+    for _, spaceID in ipairs(liste) do
+
+        if self.activeSpaceIDs[spaceID] then
+
+            descriptor.onOtherSpace =
+                false
+
+
+            return false
+
+        end
+
+    end
+
+
+    descriptor.onOtherSpace =
+        true
+
+
+    return true
+
+end
+
+
+-- Groupe les fenetres du bureau courant devant les autres, sans
+-- deranger l'ordre d'usage a l'interieur de chaque groupe.
+
+function obj:groupByCurrentSpace(collected)
+
+    if not self.currentSpaceFirst
+        or not self.activeSpaceIDs
+        or #collected < 2 then
+
+        return collected
+
+    end
+
+
+    local ici,
+          ailleurs =
+        {},
+        {}
+
+
+    for _, descriptor in ipairs(collected) do
+
+        if self:isOnOtherSpace(descriptor) == true then
+
+            ailleurs[#ailleurs + 1] =
+                descriptor
+
+        else
+
+            ici[#ici + 1] =
+                descriptor
+
+        end
+
+    end
+
+
+    for _, descriptor in ipairs(ailleurs) do
+
+        ici[#ici + 1] =
+            descriptor
+
+    end
+
+
+    return ici
 
 end
 
@@ -4476,6 +4823,15 @@ function obj:stateBadges(descriptor)
     end
 
 
+    if self.showSpaceBadges
+        and self:isOnOtherSpace(descriptor) == true then
+
+        badges[#badges + 1] =
+            self.badges.otherSpace
+
+    end
+
+
     if self.showAudioBadges and descriptor.pid then
 
         if self.audioPIDs[descriptor.pid] then
@@ -6317,8 +6673,16 @@ function obj:beginSession(direction)
     self:trimSnapshotCache()
 
 
+    -- Avant de collecter : le regroupement par bureau et les pastilles
+    -- ont besoin de savoir ce qui est visible maintenant.
+
+    self:refreshActiveSpaces()
+
+
     self.entries =
-        self:collectWindows()
+        self:groupByCurrentSpace(
+            self:collectWindows()
+        )
 
 
     if not self.entries or #self.entries == 0 then
@@ -6511,11 +6875,23 @@ function obj:commit()
     end
 
 
+    local ailleurs =
+        self:isOnOtherSpace(selected) == true
+
+
     safeCall(function()
 
         selected.window:unminimize()
 
     end)
+
+
+    if ailleurs then
+
+        ailleurs =
+            self:resolveCrossSpace(selected)
+
+    end
 
 
     safeCall(function()
@@ -6525,15 +6901,80 @@ function obj:commit()
     end)
 
 
-    self:reassertFocus(selected)
+    -- Une bascule de bureau prend le temps de son animation. Verifier
+    -- le focus avant la fin le trouve sur la fenetre precedente et
+    -- declenche une reprise qui se bat contre l'animation en cours.
+
+    self:reassertFocus(
+        selected,
+        ailleurs and self.crossSpaceFocusDelay or nil
+    )
 
 end
 
 
-function obj:reassertFocus(selected)
+-- Fenetre sur un autre bureau. Renvoie true si la bascule reste a la
+-- charge de macOS, false si la fenetre a ete amenee ici et qu'il n'y
+-- aura donc aucun changement de bureau a attendre.
 
-    if not self.focusReassertDelay
-        or self.focusReassertDelay <= 0 then
+function obj:resolveCrossSpace(selected)
+
+    if self.crossSpaceActivation ~= "bring" then
+
+        return true
+
+    end
+
+
+    local destination =
+        self:currentSpaceID()
+
+
+    if not destination then
+
+        return true
+
+    end
+
+
+    local deplacee =
+        safeCall(function()
+
+            return spaces.moveWindowToSpace(
+                selected.id,
+                destination
+            )
+
+        end)
+
+
+    if not deplacee then
+
+        -- Une fenetre en plein ecran occupe son propre bureau et ne se
+        -- deplace pas. On laisse macOS y aller.
+
+        return true
+
+    end
+
+
+    selected.onOtherSpace =
+        false
+
+
+    return false
+
+end
+
+
+function obj:reassertFocus(selected, delay)
+
+    delay =
+        delay or self.focusReassertDelay
+
+
+    if not delay
+        or delay <= 0 then
 
         return self
 
@@ -6541,7 +6982,7 @@ function obj:reassertFocus(selected)
 
 
     timer.doAfter(
-        self.focusReassertDelay,
+        delay,
         function()
 
             local focused =

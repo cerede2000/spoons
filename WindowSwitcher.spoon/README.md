@@ -110,7 +110,8 @@ spoon.WindowSwitcher.previewOnKeyboard = true
 
 Une pastille dans le coin de la vignette signale une fenetre reduite
 (`⤓`), une application masquee par Cmd+H (`⦸`), une application qui
-joue du son (`♪`) ou qui capte le micro (`◉`).
+joue du son (`♪`), qui capte le micro (`◉`), ou une fenetre posee sur
+un autre bureau (`⧉`).
 
 Les deux premieres viennent du descripteur deja construit pour filtrer
 la fenetre : elles ne coutent qu'un element de dessin.
@@ -154,6 +155,90 @@ spoon.WindowSwitcher:audioStatus()
 Dit ou en est l'inventaire sans rien changer : pastilles actives ou non,
 service en marche ou arrete, demande en vol, et la liste des processus
 qui jouent et qui captent.
+
+### Bureaux
+
+Une vignette ne disait pas si sa fenetre se trouve sur le bureau
+courant. En plein ecran, ou avec plusieurs bureaux, une bonne part de
+la grille pointait vers des fenetres invisibles ici sans que rien ne le
+signale. La pastille `⧉` le dit.
+
+#### Pourquoi cette question-la est sure
+
+Le meme WindowServer avait ete pris en defaut dans LastWindowQuits :
+interroge sur l'**existence** d'une fenetre, il garde une fenetre
+fermee comme une vivante tant que son application tourne, ce qui avait
+rendu des applications infermables.
+
+La question posee ici est differente : « ou est cette fenetre »,
+et le switcher ne liste que des fenetres vivantes. Verifie sur cette
+machine :
+
+```
+CGSGetActiveSpace                      1
+Current Space (ManagedSpaceID)         1
+CGSCopySpacesForWindows(Claude 1441)   [1]      -> ici
+CGSCopySpacesForWindows(Notes 2035)    [204]    -> autre bureau
+```
+
+Les trois API partagent la meme numerotation, ce qui autorise la
+comparaison directe.
+
+#### La liste vide est le cas majoritaire
+
+Sur 40 fenetres relevees, la plupart — panneaux, fenetres reduites,
+fenetres d'applications masquees — repondent une liste **vide** : le
+WindowServer ne situe que ce qui a une presence. Les compter comme
+« ailleurs » aurait pastille presque toute la grille. Une absence de
+reponse vaut donc « ici » : ni pastille, ni deplacement, ni
+regroupement.
+
+Une fenetre reduite ou masquee ne recoit jamais la pastille de bureau,
+meme si le WindowServer la situe encore quelque part : sa pastille
+dediee dit deja l'essentiel, et une seconde ferait croire a un simple
+changement de bureau.
+
+#### Activer une fenetre d'un autre bureau
+
+```lua
+spoon.WindowSwitcher.crossSpaceActivation = "switch"   -- defaut
+```
+
+| Valeur | Effet |
+|---|---|
+| `"switch"` | macOS bascule vers le bureau de la fenetre, avec son animation. La fenetre ne bouge pas. |
+| `"bring"` | La fenetre vient sur le bureau courant. Aucune animation, aucun detour. Elle change de bureau pour de bon. |
+
+`"bring"` est ce que fait [Sanyam-G/switch](https://github.com/Sanyam-G/switch)
+via `CGSMoveWindowsToManagedSpace`, expose ici par
+`hs.spaces.moveWindowToSpace`. Une fenetre en plein ecran occupe son
+propre bureau et refuse le deplacement : on retombe alors sur la
+bascule.
+
+`hs.spaces.gotoSpace` n'est **pas** utilise : il ouvre Mission Control
+et clique sur la vignette du bureau. Une demi-seconde d'animation
+visible a chaque Alt+Tab n'a pas sa place ici.
+
+En mode `"switch"`, la verification du focus attend
+`crossSpaceFocusDelay` (0,7 s) au lieu du delai ordinaire : verifier
+pendant la bascule trouve le focus sur la fenetre precedente et
+declenche une reprise qui se bat contre l'animation en cours.
+
+#### Autres reglages
+
+```lua
+spoon.WindowSwitcher.showSpaceBadges = true    -- la pastille
+spoon.WindowSwitcher.currentSpaceFirst = false -- grouper le bureau courant devant
+spoon.WindowSwitcher.includeOtherSpaces = true -- lister les autres bureaux
+```
+
+`currentSpaceFirst` place les fenetres du bureau courant avant les
+autres en preservant l'ordre d'usage a l'interieur de chaque groupe.
+Desactive par defaut : l'ordre par usage recent reste ce qu'on attend
+d'un Alt+Tab.
+
+`hs.spaces` repose sur les API privees de SkyLight. S'il devient
+indisponible, tout ce qui precede s'efface et le switcher continue.
 
 ### Fenetres que macOS refuse de capturer
 
