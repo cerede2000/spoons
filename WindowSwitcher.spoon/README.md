@@ -54,6 +54,7 @@ spoon.WindowSwitcher:start()
 - Apercu de la fenetre selectionnee, a sa taille et a sa place reelles, sous le panneau.
 - Pastilles d'etat sur la vignette : fenetre reduite, application masquee.
 - `Echap` annule la session sans rien activer.
+- Feux de fermeture et de reduction redessines d'apres le systeme, sur la vignette visee.
 - Restauration des fenetres minimisees avant focus.
 - Inclusion des fenetres minimisees et cachees par defaut.
 - Inclusion des autres Spaces par defaut, dans les limites des API macOS exposees a Hammerspoon.
@@ -91,7 +92,10 @@ spoon.WindowSwitcher.snapshotBudgetSeconds = 0.045
 spoon.WindowSwitcher.showStateBadges = true
 spoon.WindowSwitcher.showAudioBadges = true
 spoon.WindowSwitcher.showCloseButton = true
+spoon.WindowSwitcher.showMinimizeButton = true
 spoon.WindowSwitcher.enableCloseKey = true
+spoon.WindowSwitcher.enableMinimizeKey = true
+spoon.WindowSwitcher.trafficLightSize = 19
 spoon.WindowSwitcher.helperLaunchMode = "task"
 spoon.WindowSwitcher.helperIdleGraceSeconds = 6
 spoon.WindowSwitcher.enableCancelKey = true
@@ -138,32 +142,53 @@ spoon.WindowSwitcher.badges.minimized.color = { red = 0.98, green = 0.62, blue =
 `showStateBadges = false` retire les pastilles de fenetre,
 `showAudioBadges = false` celles du son.
 
-### Fermer une fenetre
+### Fermer et reduire
 
-Le feu de fermeture apparait **en haut a gauche** de la vignette visee,
-a la place qu'il occupe sur une fenetre macOS, et seulement quand la
-souris est en jeu : au clavier il n'aurait aucune cible, et affiche sur
-toutes les tuiles il encombrerait la grille. Les pastilles d'etat sont
-donc posees a droite, de droite a gauche.
+Les deux feux apparaissent **en haut a gauche** de la vignette visee, a
+la place et dans l'ordre qu'ils occupent sur une fenetre macOS, et
+seulement quand la souris est en jeu : au clavier ils n'auraient aucune
+cible, et affiches sur toutes les tuiles ils encombreraient la grille.
+Les pastilles d'etat sont donc posees a droite, de droite a gauche.
 
-Ce n'est pas un glyphe de police mais le bouton du systeme redessine :
-disque `#FF5F57` borde de `#E0443E`, et une croix faite de deux segments
-a bouts arrondis couvrant quatre dixiemes du disque, comme celle que
-macOS dessine au survol.
+Ce ne sont pas des glyphes de police mais les boutons du systeme
+redessines. Toutes les constantes viennent de mesures faites sur une
+vraie fenetre, capturee a 2x avec l'etat survole force :
 
-Sa cible de clic est posee apres celle de la tuile, donc elle recoit le
-clic en premier — sans quoi elle activerait la fenetre au lieu de la
-fermer.
+| | fermer | reduire |
+|---|---|---|
+| remplissage | `#EC6765` | `#F2CA44` |
+| lisere | `#E73935` clair, `#DD2F2C` sombre | `#EFBA0B` / `#E5B102` |
+| symbole | le remplissage assombri de moitie, exactement | idem |
+| etendue visible | 50 % du disque | 57 % |
+| epaisseur du trait | 14,7 % du disque | idem |
+| bouts | arrondis | arrondis |
+| ecart entre centres | 1,64 fois le diametre | |
 
-Au clavier, `W` ferme la fenetre visee. La session continue tant qu'il
-reste des fenetres ; fermer la derniere la termine.
+Le remplissage et le symbole sont identiques en theme clair et sombre ;
+seul le lisere bouge un peu.
+
+Deux details qui font la difference a l'oeil : le symbole n'a pas de
+couleur propre, c'est le disque multiplie par 0,5 — verifie canal par
+canal sur les deux boutons et les deux themes ; et les bouts arrondis
+depassent des extremites du trait de la moitie de son epaisseur, si bien
+que le trait doit etre plus court d'une epaisseur entiere que l'etendue
+visible.
+
+Leurs cibles de clic sont posees apres celle de la tuile, donc elles
+recoivent le clic en premier — sans quoi elles activeraient la fenetre.
+
+Au clavier, `W` ferme la fenetre visee et `M` la reduit. Fermer retire
+la tuile et termine la session s'il n'en reste aucune ; reduire la garde
+en place, invalide sa vignette et fait apparaitre sa pastille.
 
 Si l'application refuse la fermeture, la tuile reste en place et le
 motif est journalise.
 
 ```lua
 spoon.WindowSwitcher.showCloseButton = false
+spoon.WindowSwitcher.showMinimizeButton = false
 spoon.WindowSwitcher.enableCloseKey = false
+spoon.WindowSwitcher.enableMinimizeKey = false
 ```
 
 ### Annuler

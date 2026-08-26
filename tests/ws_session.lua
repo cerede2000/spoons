@@ -449,33 +449,112 @@ obj:closeButtonElements(els2, { index = 1 }, { x = 0, y = 0, w = 200, h = 150 },
 R.check("tuile non visée : aucune croix", #els2, 0)
 
 obj:closeButtonElements(els2, { index = 1 }, { x = 0, y = 0, w = 200, h = 150 }, true)
-R.check("tuile visée : disque, deux traits et cible", #els2, 4)
-R.check("c'est un vrai disque, pas un carré arrondi", els2[1].type, "circle")
-R.check("aux couleurs du feu macOS", els2[1].fillColor, obj.closeButtonColor)
-R.check("placé en haut à gauche, comme sur une fenêtre",
-    els2[1].center.x, 6 + obj.closeButtonSize / 2)
+R.check("tuile visée : deux feux, soit 4 + 3 éléments", #els2, 7)
+
+R.section("Le feu de fermeture, mesuré sur une vraie fenêtre")
+R.check("c'est un disque, pas un carré arrondi", els2[1].type, "circle")
+R.check("au remplissage relevé", els2[1].fillColor, obj.trafficLights.close.fill)
+R.check("avec son liseré plus foncé", els2[1].strokeColor, obj.trafficLights.close.rim)
+R.check("en haut à gauche, comme sur une fenêtre",
+    els2[1].center.x, 6 + obj.trafficLightSize / 2)
 R.check("la croix est faite de segments", els2[2].type, "segments")
 R.check("à bouts arrondis", els2[2].strokeCapStyle, "round")
-R.check("deux traits croisés", els2[3].type, "segments")
-R.check("le second part de l'autre coin",
+R.check("deux traits", els2[3].type, "segments")
+R.check("croisés : le second part de l'autre coin",
     els2[3].coordinates[1].x > els2[2].coordinates[1].x, true)
+R.check("le symbole est le disque assombri de moitié",
+    els2[2].strokeColor, obj.trafficLightSymbolColor)
+local epaisseur = obj.trafficLightSize * obj.trafficLightStrokeRatio
+R.check("la croix couvre la moitié du disque, bouts arrondis compris",
+    els2[2].coordinates[2].x - els2[2].coordinates[1].x + epaisseur,
+    obj.trafficLightSize * obj.closeSymbolExtent)
+R.check("le trait lui-même est plus court d'une épaisseur",
+    els2[2].coordinates[2].x - els2[2].coordinates[1].x
+        < obj.trafficLightSize * obj.closeSymbolExtent, true)
 R.check("la cible porte son identifiant", els2[4].id, "close:1")
 R.check("elle est cliquable", els2[4].trackMouseUp, true)
+
+R.section("Le feu de réduction, jaune, à sa droite")
+R.check("un disque aussi", els2[5].type, "circle")
+R.check("au jaune relevé", els2[5].fillColor, obj.trafficLights.minimize.fill)
+R.check("posé à l'écart standard",
+    els2[5].center.x - els2[1].center.x,
+    obj.trafficLightSize + math.floor(obj.trafficLightSize * obj.trafficLightGapRatio))
+R.check("un seul trait, horizontal", els2[6].type, "segments")
+R.check("il est bien horizontal",
+    els2[6].coordinates[1].y, els2[6].coordinates[2].y)
+R.check("même symbole assombri de moitié",
+    els2[6].strokeColor, obj.trafficLightSymbolColor)
+R.check("la barre est un peu plus large que la croix",
+    els2[6].coordinates[2].x - els2[6].coordinates[1].x
+        > els2[2].coordinates[2].x - els2[2].coordinates[1].x, true)
+R.check("sa cible porte son identifiant", els2[7].id, "minimize:1")
 
 R.section("La croix et les pastilles ne se marchent pas dessus")
 local melange = {}
 obj:badgeElements(melange, { id = 20, minimized = true, hidden = true },
     { x = 0, y = 0, w = 200, h = 150 })
 local plusAGauche = math.min(melange[1].frame.x, melange[3].frame.x)
-R.check("les pastilles restent à droite du bouton",
-    plusAGauche > 6 + obj.closeButtonSize, true)
+local largeurFeux = 6 + (2 * obj.trafficLightSize)
+    + math.floor(obj.trafficLightSize * obj.trafficLightGapRatio)
+R.check("les pastilles restent à droite des deux feux",
+    plusAGauche > largeurFeux, true)
 
 obj.showCloseButton = false
+obj.showMinimizeButton = false
 local els3 = {}
 obj:closeButtonElements(els3, { index = 1 }, { x = 0, y = 0, w = 200, h = 150 }, true)
-R.check("désactivable", #els3, 0)
+R.check("les deux désactivables", #els3, 0)
+
 obj.showCloseButton = true
+local els4 = {}
+obj:closeButtonElements(els4, { index = 1 }, { x = 0, y = 0, w = 200, h = 150 }, true)
+R.check("fermeture seule : quatre éléments", #els4, 4)
+obj.showMinimizeButton = true
 obj.mouseArmed = false
+
+R.section("Réduire depuis le switcher")
+nouvelleSession()
+obj:step(1)
+local cibleR = obj.entries[1]
+R.check("la fenêtre n'est pas réduite", cibleR.minimized, false)
+obj:minimizeEntry(1)
+R.check("elle l'est maintenant", obj.entries[1].minimized, true)
+R.check("la tuile reste, la fenêtre existe toujours", #obj.entries, 3)
+R.check("sa vignette est invalidée", obj.snapshotCache[cibleR.id], nil)
+R.check("la pastille apparaît",
+    obj:stateBadges(obj.entries[1])[1].glyph, obj.badges.minimized.glyph)
+
+R.section("Réduire deux fois ne fait rien de plus")
+local avantR = #obj.entries
+obj:minimizeEntry(1)
+R.check("aucun effet", #obj.entries, avantR)
+
+R.section("M réduit au clavier")
+nouvelleSession()
+obj:step(1)
+local tapM
+for _, t in ipairs(ctl.eventtaps) do
+    if t.types and t.types[1] == "keyDown" then tapM = t end
+end
+local viseM = obj.selectedIndex
+local mangeM = tapM.fn({ getKeyCode = function() return obj:minimizeKeyCode() end })
+R.check("la touche est consommée", mangeM, true)
+R.check("la fenêtre visée est réduite", obj.entries[viseM].minimized, true)
+R.check("la session continue", obj.entries ~= nil, true)
+obj.enableMinimizeKey = false
+R.check("désactivable : la touche passe",
+    tapM.fn({ getKeyCode = function() return obj:minimizeKeyCode() end }), false)
+obj.enableMinimizeKey = true
+obj:commit()
+
+R.section("Un clic sur le jaune réduit, sans activer")
+nouvelleSession()
+obj:step(1)
+obj:handleMouseEvent("mouseUp", "minimize:1")
+R.check("réduite", obj.entries[1].minimized, true)
+R.check("sans activer la fenêtre", obj.entries ~= nil, true)
+obj:commit()
 
 R.section("Un clic sur la croix ferme, un clic ailleurs active")
 nouvelleSession()

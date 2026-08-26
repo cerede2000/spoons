@@ -362,6 +362,7 @@ function M.window(opts)
     w.subrole     = function() return opts.subrole or "AXStandardWindow" end
     w.frame       = function() return opts.frame or { x=0, y=0, w=800, h=600 } end
     w.unminimize  = function() table.insert(ctl_of(w), "unminimize") end
+    w.minimize    = function() opts.minimized = true; return true end
     w.focus       = function() end
     w._opts       = opts
     return w

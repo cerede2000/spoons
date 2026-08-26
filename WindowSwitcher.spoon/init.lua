@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.15.0"
+obj.version = "0.16.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -211,35 +211,76 @@ obj.enableCancelKey = true
 -- encombrerait la grille.
 obj.showCloseButton = true
 
-obj.closeButtonSize = 19
+obj.showMinimizeButton = true
 
--- Couleurs du feu de fermeture de macOS : #FF5F57 pour le disque,
--- #E0443E pour son bord. La croix n'est pas un glyphe de police mais
--- deux segments a bouts arrondis, comme celle que dessine le systeme.
-obj.closeButtonColor = {
-    red = 1.00,
-    green = 0.373,
-    blue = 0.341,
-    alpha = 1,
+obj.trafficLightSize = 19
+
+-- Ecart entre les deux boutons, en fraction de leur taille. Releve sur
+-- une vraie fenetre : boutons de 14 pt aux abscisses 9 et 32, soit 9 pt
+-- d'ecart.
+obj.trafficLightGapRatio = 0.64
+
+-- Tout ce qui suit vient de mesures faites sur une vraie fenetre macOS,
+-- capturee a 2x avec l'etat survole force. Le remplissage et le symbole
+-- sont identiques en theme clair et sombre ; seul le lisere bouge un
+-- peu, on prend la moyenne des deux.
+obj.trafficLights = {
+    close = {
+        fill = {
+            red = 0.925,
+            green = 0.404,
+            blue = 0.396,
+            alpha = 1,
+        },
+        rim = {
+            red = 0.878,
+            green = 0.204,
+            blue = 0.200,
+            alpha = 1,
+        },
+    },
+    minimize = {
+        fill = {
+            red = 0.949,
+            green = 0.792,
+            blue = 0.267,
+            alpha = 1,
+        },
+        rim = {
+            red = 0.918,
+            green = 0.718,
+            blue = 0.027,
+            alpha = 1,
+        },
+    },
 }
 
-obj.closeButtonStrokeColor = {
-    red = 0.878,
-    green = 0.267,
-    blue = 0.243,
-    alpha = 1,
+-- Le symbole n'a pas de couleur propre : c'est exactement le disque
+-- assombri de moitie. Verifie sur les deux boutons et les deux themes,
+-- au canal pres : #763433 = #EC6765 x 0,5 et #7A6522 = #F2CA44 x 0,5.
+obj.trafficLightSymbolColor = {
+    white = 0,
+    alpha = 0.5,
 }
 
-obj.closeGlyphColor = {
-    red = 0.30,
-    green = 0.02,
-    blue = 0.02,
-    alpha = 0.85,
-}
+-- Epaisseur du trait, en fraction du diametre : 4,24 px releves sur un
+-- disque de 28 px pour la croix, 4 px pour la barre.
+obj.trafficLightStrokeRatio = 0.147
+
+-- Etendue visible du symbole, bouts arrondis compris, en fraction du
+-- diametre : c'est ce que mesure une boite englobante sur la capture.
+-- Les bouts depassant des extremites du trait de la moitie de son
+-- epaisseur de chaque cote, le trait lui-meme est plus court d'une
+-- epaisseur entiere.
+obj.closeSymbolExtent = 0.50
+
+obj.minimizeSymbolExtent = 0.571
 
 -- W ferme la fenetre visee au clavier. Le code physique est lu sur la
 -- disposition courante.
 obj.enableCloseKey = true
+
+obj.enableMinimizeKey = true
 
 obj.panelCornerRadius = 24
 
@@ -4670,12 +4711,17 @@ function obj:tileElements(elements, item, offsetX, offsetY)
 end
 
 
-function obj:closeButtonElements(elements, item, thumbFrame, isSelected)
+-- Dessine un feu de fenetre macOS : disque plein, lisere, et le symbole
+-- obtenu en assombrissant le disque de moitie. Les proportions viennent
+-- de mesures faites sur une vraie fenetre.
 
-    if not self.showCloseButton
-        or not self.enableMouseSelection
-        or not isSelected
-        or not self.mouseArmed then
+function obj:trafficLightElements(elements, kind, frame, identifier)
+
+    local palette =
+        self.trafficLights[kind]
+
+
+    if not palette then
 
         return elements
 
@@ -4683,18 +4729,15 @@ function obj:closeButtonElements(elements, item, thumbFrame, isSelected)
 
 
     local size =
-        self.closeButtonSize
+        frame.w
 
 
-    -- En haut a gauche, comme le feu de fermeture d'une fenetre macOS.
+    local centerX =
+        frame.x + (size / 2)
 
-    local frame =
-        {
-            x = thumbFrame.x + 6,
-            y = thumbFrame.y + 6,
-            w = size,
-            h = size,
-        }
+
+    local centerY =
+        frame.y + (size / 2)
 
 
     table.insert(
@@ -4703,47 +4746,59 @@ function obj:closeButtonElements(elements, item, thumbFrame, isSelected)
             type = "circle",
             action = "strokeAndFill",
             center = {
-                x = frame.x + (size / 2),
-                y = frame.y + (size / 2),
+                x = centerX,
+                y = centerY,
             },
             radius = (size / 2) - 0.5,
-            fillColor = self.closeButtonColor,
-            strokeColor = self.closeButtonStrokeColor,
+            fillColor = palette.fill,
+            strokeColor = palette.rim,
             strokeWidth = 1,
         }
     )
 
 
-    -- La croix du systeme occupe environ quatre dixiemes du disque.
-
-    local inset =
-        size * 0.30
-
-
     local thickness =
-        math.max(1, size * 0.095)
+        math.max(1, size * self.trafficLightStrokeRatio)
 
 
-    local left =
-        frame.x + inset
+    local strokes =
+        {}
 
 
-    local right =
-        frame.x + size - inset
+    if kind == "close" then
+
+        local reach =
+            (size * self.closeSymbolExtent - thickness) / 2
 
 
-    local top =
-        frame.y + inset
+        strokes = {
+            {
+                { x = centerX - reach, y = centerY - reach },
+                { x = centerX + reach, y = centerY + reach },
+            },
+            {
+                { x = centerX + reach, y = centerY - reach },
+                { x = centerX - reach, y = centerY + reach },
+            },
+        }
+
+    else
+
+        local reach =
+            (size * self.minimizeSymbolExtent - thickness) / 2
 
 
-    local bottom =
-        frame.y + size - inset
+        strokes = {
+            {
+                { x = centerX - reach, y = centerY },
+                { x = centerX + reach, y = centerY },
+            },
+        }
+
+    end
 
 
-    for _, stroke in ipairs({
-        { { x = left, y = top }, { x = right, y = bottom } },
-        { { x = right, y = top }, { x = left, y = bottom } },
-    }) do
+    for _, stroke in ipairs(strokes) do
 
         table.insert(
             elements,
@@ -4751,7 +4806,7 @@ function obj:closeButtonElements(elements, item, thumbFrame, isSelected)
                 type = "segments",
                 action = "stroke",
                 coordinates = stroke,
-                strokeColor = self.closeGlyphColor,
+                strokeColor = self.trafficLightSymbolColor,
                 strokeWidth = thickness,
                 strokeCapStyle = "round",
             }
@@ -4763,7 +4818,7 @@ function obj:closeButtonElements(elements, item, thumbFrame, isSelected)
     table.insert(
         elements,
         {
-            id = "close:" .. tostring(item.index),
+            id = identifier,
             type = "rectangle",
             action = "fill",
             frame = {
@@ -4778,6 +4833,68 @@ function obj:closeButtonElements(elements, item, thumbFrame, isSelected)
             trackMouseUp = true,
         }
     )
+
+
+    return elements
+
+end
+
+
+function obj:closeButtonElements(elements, item, thumbFrame, isSelected)
+
+    if not self.enableMouseSelection
+        or not isSelected
+        or not self.mouseArmed then
+
+        return elements
+
+    end
+
+
+    local size =
+        self.trafficLightSize
+
+
+    local gap =
+        math.floor(size * self.trafficLightGapRatio)
+
+
+    -- En haut a gauche, dans l'ordre du systeme : fermer puis reduire.
+
+    local x =
+        thumbFrame.x + 6
+
+
+    local y =
+        thumbFrame.y + 6
+
+
+    if self.showCloseButton then
+
+        self:trafficLightElements(
+            elements,
+            "close",
+            { x = x, y = y, w = size, h = size },
+            "close:" .. tostring(item.index)
+        )
+
+
+        x =
+            x + size + gap
+
+    end
+
+
+    if self.showMinimizeButton then
+
+        self:trafficLightElements(
+            elements,
+            "minimize",
+            { x = x, y = y, w = size, h = size },
+            "minimize:" .. tostring(item.index)
+        )
+
+    end
 
 
     return elements
@@ -4867,9 +4984,6 @@ function obj:mouseHasMoved()
 
 end
 
-
--- Ferme la fenetre visee et retire sa tuile. La session continue s'il
--- reste des fenetres.
 
 function obj:closeEntry(index)
 
@@ -4965,6 +5079,81 @@ function obj:closeSelected()
 end
 
 
+-- Reduire ne retire pas la tuile : la fenetre existe toujours, elle
+-- change seulement d'etat. Sa vignette n'est plus valable et sa
+-- pastille doit apparaitre.
+
+function obj:minimizeEntry(index)
+
+    local descriptor =
+        self.entries and self.entries[index]
+
+
+    if not descriptor or descriptor.minimized then
+
+        return self
+
+    end
+
+
+    local ok,
+          err =
+        safeCall(function()
+
+            return descriptor.window:minimize()
+
+        end)
+
+
+    if err then
+
+        self:log(
+            "Reduction refusee pour "
+            .. tostring(descriptor.displayTitle)
+            .. " : " .. tostring(err)
+        )
+
+
+        return self
+
+    end
+
+
+    descriptor.minimized =
+        true
+
+
+    descriptor.snapshotAttempted =
+        nil
+
+
+    self.snapshotCache[descriptor.id] =
+        nil
+
+
+    self:discardCaptureFile(descriptor.id)
+
+
+    self.titleCache =
+        {}
+
+
+    self:hidePreview()
+    self:redraw()
+
+
+    return self
+
+end
+
+
+function obj:minimizeSelected()
+
+    return self:minimizeEntry(self.selectedIndex)
+
+end
+
+
 function obj:handleMouseEvent(message, elementID)
 
     local closeIndex =
@@ -4976,6 +5165,24 @@ function obj:handleMouseEvent(message, elementID)
         if message == "mouseUp" then
 
             self:closeEntry(tonumber(closeIndex))
+
+        end
+
+
+        return
+
+    end
+
+
+    local minimizeIndex =
+        tostring(elementID or ""):match("^minimize:(%d+)$")
+
+
+    if minimizeIndex then
+
+        if message == "mouseUp" then
+
+            self:minimizeEntry(tonumber(minimizeIndex))
 
         end
 
@@ -5525,6 +5732,32 @@ function obj:closeKeyCode()
 end
 
 
+function obj:minimizeKeyCode()
+
+    if self.cachedMinimizeKeyCode then
+
+        return self.cachedMinimizeKeyCode
+
+    end
+
+
+    local code =
+        safeCall(function()
+
+            return hs.keycodes.map.m
+
+        end)
+
+
+    self.cachedMinimizeKeyCode =
+        code or 46
+
+
+    return self.cachedMinimizeKeyCode
+
+end
+
+
 function obj:ensureSessionKeyTap()
 
     if self.sessionKeyTap then
@@ -5564,6 +5797,17 @@ function obj:ensureSessionKeyTap()
                     and code == self:closeKeyCode() then
 
                     self:closeSelected()
+
+
+                    return true
+
+                end
+
+
+                if self.enableMinimizeKey
+                    and code == self:minimizeKeyCode() then
+
+                    self:minimizeSelected()
 
 
                     return true
