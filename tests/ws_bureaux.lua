@@ -58,6 +58,11 @@ local function nouvelleSession()
     ctl.movedToSpace = {}
     ctl.moveSucceeds = true
     ctl.spacesBroken = false
+    ctl.activeSpacesBroken = false
+    ctl.managedDisplays = { { ["Display Identifier"] = "ECRAN-1",
+                              ["Current Space"] = { ManagedSpaceID = 1 },
+                              Spaces = { { ManagedSpaceID = 1, type = 0 },
+                                         { ManagedSpaceID = 2, type = 0 } } } }
     ctl.activeSpaces = { ["ECRAN-1"] = 1 }
     ctl.activeSpaceOnScreen = 1
     ctl.windowSpaces = { [1] = { 1 }, [2] = { 2 }, [3] = { 1 } }
@@ -86,13 +91,17 @@ R.check("fenêtre d'un autre bureau", obj:isOnOtherSpace({ id = 2 }), true)
 ctl.windowSpaces[4] = { 1, 2, 3 }
 R.check("fenêtre présente sur tous les bureaux : ici", obj:isOnOtherSpace({ id = 4 }), false)
 
-R.section("Une fenêtre réduite ou masquée n'est sur aucun bureau")
--- Le WindowServer la situe encore sur son dernier bureau. Le dire à
--- l'utilisateur serait exact et trompeur : sa pastille dédiée dit déjà
--- l'essentiel, et une seconde pastille ferait croire à un simple
--- changement de bureau.
-R.check("réduite", obj:isOnOtherSpace({ id = 2, minimized = true }), false)
-R.check("masquée", obj:isOnOtherSpace({ id = 2, hidden = true }), false)
+R.section("Une fenêtre réduite garde son bureau")
+-- Mesuré sur une vraie NSWindow :
+--   ouverte, visible   spaces=[1]
+--   RÉDUITE (Dock)     spaces=[1]
+--   restaurée          spaces=[1]
+-- unminimize la rend à son bureau d'origine : qui tabule dessus se
+-- retrouve ailleurs. C'est ce que la pastille doit annoncer, et ce que
+-- le mode « bring » doit pouvoir éviter.
+R.check("réduite et ailleurs", obj:isOnOtherSpace({ id = 2, minimized = true }), true)
+R.check("masquée et ailleurs", obj:isOnOtherSpace({ id = 2, hidden = true }), true)
+R.check("réduite mais ici", obj:isOnOtherSpace({ id = 1, minimized = true }), false)
 
 R.section("Sans réponse, on n'invente rien")
 R.check("fenêtre inconnue du WindowServer", obj:isOnOtherSpace({ id = 99 }), false)
@@ -118,10 +127,12 @@ R.check("fenêtre d'ailleurs : une pastille", #obj:stateBadges({ id = 2 }), 1)
 R.check("le glyphe est celui des bureaux",
     obj:stateBadges({ id = 2 })[1].glyph, obj.badges.otherSpace.glyph)
 
-R.check("réduite ET ailleurs : la réduction seule",
-    #obj:stateBadges({ id = 2, minimized = true }), 1)
-R.check("et c'est bien celle de la réduction",
+R.check("réduite ET ailleurs : les deux pastilles",
+    #obj:stateBadges({ id = 2, minimized = true }), 2)
+R.check("la réduction passe en premier",
     obj:stateBadges({ id = 2, minimized = true })[1].glyph, obj.badges.minimized.glyph)
+R.check("le bureau ensuite",
+    obj:stateBadges({ id = 2, minimized = true })[2].glyph, obj.badges.otherSpace.glyph)
 
 obj.showSpaceBadges = false
 R.check("désactivable", #obj:stateBadges({ id = 2 }), 0)
@@ -246,5 +257,95 @@ for _, t in ipairs(ctl.timers) do
     if t.delay == obj.crossSpaceFocusDelay then attente = true end
 end
 R.check("et l'animation est de nouveau attendue", attente, true)
+
+
+------------------------------------------------------------
+R.section("Moniteurs sans espaces séparés : la lecture directe sauve tout")
+------------------------------------------------------------
+-- hs.spaces.activeSpaces() passe par activeSpaceOnScreen(), qui remplace
+-- l'UUID de l'écran par la chaîne « Main » quand
+-- NSScreen.screensHaveSeparateSpaces vaut faux, puis cherche un écran
+-- nommé « Main » dans une liste qui n'en contient que des UUID. Mesuré
+-- sur la machine :
+--
+--   NSScreen.screensHaveSeparateSpaces = false
+--   hs.screen:getUUID()                = 37D8832A-2D66-...
+--   Display Identifier                 = 37D8832A-2D66-...
+--
+-- Elle renvoyait nil, et TOUT ce qui concerne les bureaux s'éteignait
+-- sans un mot. data_managedDisplaySpaces() donne la même information
+-- sans cette identification d'écran.
+nouvelleSession()
+ctl.activeSpacesBroken = true
+obj:refreshActiveSpaces()
+R.check("les bureaux sont quand même relevés", obj.activeSpaceIDs and obj.activeSpaceIDs[1], true)
+R.check("le switcher reste utilisable", obj.spacesUsable, true)
+R.check("la pastille apparaît toujours", #obj:stateBadges({ id = 2 }), 1)
+R.check("et la destination est connue", obj:currentSpaceID(), 1)
+
+R.section("Repli sur l'API documentée si la lecture directe disparaît")
+nouvelleSession()
+ctl.managedDisplays = nil
+obj:refreshActiveSpaces()
+R.check("l'inventaire vient de activeSpaces()", obj.activeSpaceIDs[1], true)
+R.check("destination connue", obj:currentSpaceID(), 1)
+
+R.section("Les deux sources muettes : on éteint proprement")
+nouvelleSession()
+ctl.managedDisplays = nil
+ctl.activeSpacesBroken = true
+obj:refreshActiveSpaces()
+R.check("indisponible", obj.spacesUsable, false)
+R.check("aucun bureau", obj.activeSpaceIDs, nil)
+R.check("aucune destination", obj:currentSpaceID(), nil)
+
+------------------------------------------------------------
+R.section("Le déplacement précède le réveil de la fenêtre")
+------------------------------------------------------------
+-- Démasquer ou restaurer d'abord fait basculer macOS vers le bureau de
+-- la fenêtre : précisément ce que « bring » cherche à éviter. C'est
+-- aussi l'ordre retenu par Sanyam-G/switch.
+nouvelleSession()
+obj.crossSpaceActivation = "bring"
+local ordre = {}
+local cachee = lib.app(ctl, { name = "Mail", bundle = "com.apple.mail", hidden = true })
+local wcache = lib.window({ id = 2, app = cachee, title = "Ailleurs" })
+wcache.unminimize = function() ordre[#ordre + 1] = "unminimize" end
+wcache.focus = function() ordre[#ordre + 1] = "focus" end
+cachee.unhide = function() ordre[#ordre + 1] = "unhide"; cachee._hidden = false; return true end
+local vraiMove = hs.spaces.moveWindowToSpace
+hs.spaces.moveWindowToSpace = function(id, sp)
+    ordre[#ordre + 1] = "move"
+    return vraiMove(id, sp)
+end
+ctl.filterWindows = { wcache }
+ctl.allWindows = { wcache }
+obj:step(1)
+obj:commit()
+hs.spaces.moveWindowToSpace = vraiMove
+R.check("le déplacement d'abord", ordre[1], "move")
+R.check("puis le démasquage", ordre[2], "unhide")
+R.check("puis la restauration", ordre[3], "unminimize")
+R.check("et le focus en dernier", ordre[4], "focus")
+
+R.section("Un déplacement qui n'aboutit pas est constaté, pas cru")
+-- Le retour de l'API ne fait pas foi : on relit la position. Une fenêtre
+-- en plein écran occupe son propre bureau et ne bouge pas.
+nouvelleSession()
+obj.crossSpaceActivation = "bring"
+local vraiMove2 = hs.spaces.moveWindowToSpace
+-- l'API prétend avoir réussi, mais la fenêtre n'a pas bougé
+hs.spaces.moveWindowToSpace = function() return true end
+ctl.printed = {}
+obj:step(1)
+obj:commit()
+hs.spaces.moveWindowToSpace = vraiMove2
+R.check("le mensonge est détecté",
+    table.concat(ctl.printed, " "):find("Deplacement refuse", 1, true) ~= nil, true)
+local attente = false
+for _, t in ipairs(ctl.timers) do
+    if t.delay == obj.crossSpaceFocusDelay then attente = true end
+end
+R.check("et la bascule est de nouveau attendue", attente, true)
 
 R.finish()

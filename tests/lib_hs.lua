@@ -24,12 +24,18 @@ function M.install(opts)
         files = {}, dirs = {}, removed = {}, launchedApps = {}, osExec = {},
         links = {}, uid = 501, windowSpaces = {}, spacesBroken = false,
         activeSpaces = { ["ECRAN-1"] = 1 }, activeSpaceOnScreen = 1,
+        activeSpacesBroken = false,
+        managedDisplays = { { ["Display Identifier"] = "ECRAN-1",
+                              ["Current Space"] = { ManagedSpaceID = 1 },
+                              Spaces = { { ManagedSpaceID = 1, type = 0 },
+                                         { ManagedSpaceID = 2, type = 0 } } } },
         movedToSpace = {}, moveSucceeds = true, spaceCalls = 0,
         focused = {}, unminimized = {}, unhidden = {},
     }
 
     local function screenObj(t)
         local o = {}
+        o.getUUID = function() return t.uuid or "ECRAN-1" end
         o.id = function() return t.id end
         o.frame = function() return { x=t.x, y=t.y+24, w=t.w, h=t.h } end
         o.fullFrame = function() return { x=t.x, y=t.y, w=t.w, h=t.fullH } end
@@ -154,10 +160,21 @@ function M.install(opts)
                 return ctl.windowSpaces[id]
             end,
             -- ctl.activeSpaces = { [UUID d'ecran] = identifiant d'espace }
+            -- ctl.activeSpacesBroken simule le defaut reel de
+            -- hs.spaces.activeSpaces() quand les moniteurs n'ont pas
+            -- d'espaces separes : elle ne trouve jamais l'ecran.
             activeSpaces = function()
                 if ctl.spacesBroken then error("hs.spaces indisponible") end
                 ctl.spaceCalls = ctl.spaceCalls + 1
+                if ctl.activeSpacesBroken then return nil, "screen not found" end
                 return ctl.activeSpaces
+            end,
+            -- ctl.managedDisplays = liste brute, telle que la rend
+            -- CGSCopyManagedDisplaySpaces.
+            data_managedDisplaySpaces = function()
+                if ctl.spacesBroken then error("hs.spaces indisponible") end
+                ctl.spaceCalls = ctl.spaceCalls + 1
+                return ctl.managedDisplays
             end,
             activeSpaceOnScreen = function()
                 if ctl.spacesBroken then error("hs.spaces indisponible") end

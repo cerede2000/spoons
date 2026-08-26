@@ -193,10 +193,20 @@ WindowServer ne situe que ce qui a une presence. Les compter comme
 reponse vaut donc « ici » : ni pastille, ni deplacement, ni
 regroupement.
 
-Une fenetre reduite ou masquee ne recoit jamais la pastille de bureau,
-meme si le WindowServer la situe encore quelque part : sa pastille
-dediee dit deja l'essentiel, et une seconde ferait croire a un simple
-changement de bureau.
+#### Une fenetre reduite garde son bureau
+
+```
+ouverte, visible   spaces=[1]
+REDUITE (Dock)     spaces=[1]
+restauree          spaces=[1]
+```
+
+`unminimize` la rend a son bureau d'origine : qui tabule dessus se
+retrouve ailleurs. Elle porte donc les **deux** pastilles, `▼` et `⧉`,
+et le mode `"bring"` la deplace comme les autres.
+
+Une version precedente les ecartait, en supposant qu'une fenetre reduite
+n'appartenait plus a aucun bureau. C'etait faux.
 
 #### Activer une fenetre d'un autre bureau
 
@@ -211,9 +221,17 @@ spoon.WindowSwitcher.crossSpaceActivation = "switch"   -- defaut
 
 `"bring"` est ce que fait [Sanyam-G/switch](https://github.com/Sanyam-G/switch)
 via `CGSMoveWindowsToManagedSpace`, expose ici par
-`hs.spaces.moveWindowToSpace`. Une fenetre en plein ecran occupe son
-propre bureau et refuse le deplacement : on retombe alors sur la
-bascule.
+`hs.spaces.moveWindowToSpace`.
+
+Le deplacement passe **avant** le demasquage, la restauration et le
+focus : reveiller la fenetre d'abord fait basculer macOS vers son
+bureau, precisement ce qu'on cherche a eviter. C'est aussi l'ordre
+retenu par Sanyam-G/switch.
+
+Le retour de l'API ne fait pas foi : la position est **relue** apres le
+deplacement. Une fenetre en plein ecran occupe son propre bureau et ne
+bouge pas ; on le constate au lieu de le croire, on le journalise, et on
+retombe sur la bascule.
 
 `hs.spaces.gotoSpace` n'est **pas** utilise : il ouvre Mission Control
 et clique sur la vignette du bureau. Une demi-seconde d'animation
@@ -236,6 +254,28 @@ spoon.WindowSwitcher.includeOtherSpaces = true -- lister les autres bureaux
 autres en preservant l'ordre d'usage a l'interieur de chaque groupe.
 Desactive par defaut : l'ordre par usage recent reste ce qu'on attend
 d'un Alt+Tab.
+
+#### Pourquoi l'inventaire ne passe pas par `hs.spaces.activeSpaces()`
+
+Cette fonction passe par `activeSpaceOnScreen()`, qui remplace l'UUID de
+l'ecran par la chaine `"Main"` quand
+`NSScreen.screensHaveSeparateSpaces` vaut faux — puis cherche un ecran
+nomme `"Main"` dans une liste qui n'en contient que des UUID. Mesure :
+
+```
+NSScreen.screensHaveSeparateSpaces = false
+hs.screen:getUUID()                = 37D8832A-2D66-...
+Display Identifier                 = 37D8832A-2D66-...
+```
+
+Elle renvoie `nil`, et **tout ce qui concerne les bureaux s'eteignait
+sans un mot** des que l'option « Les moniteurs ont des espaces separes »
+etait decochee.
+
+`data_managedDisplaySpaces()` donne la meme information sans cette
+identification d'ecran, en un seul appel — celui-la meme dont
+`activeSpaces()` se sert une fois par ecran. Le repli sur l'API
+documentee reste en place si la lecture directe disparait un jour.
 
 `hs.spaces` repose sur les API privees de SkyLight. S'il devient
 indisponible, tout ce qui precede s'efface et le switcher continue.

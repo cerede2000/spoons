@@ -70,7 +70,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.18.0"
+obj.version = "0.18.1"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -773,6 +773,10 @@ obj.activeSpaceIDs = nil
 -- Faux des qu'un appel a hs.spaces a echoue : on cesse d'insister pour
 -- la session en cours.
 obj.spacesUsable = true
+
+-- Bureau visible de l'ecran qui a le clavier, releve en meme temps que
+-- les autres. Destination d'une fenetre qu'on fait venir a soi.
+obj.currentSpace = nil
 
 obj.windowFilterInstance = nil
 
@@ -1632,9 +1636,33 @@ end
 -- switcher ne pose que la premiere question.
 ------------------------------------------------------------
 
+-- L'inventaire est lu directement, et non par hs.spaces.activeSpaces().
+--
+-- Cette derniere passe par activeSpaceOnScreen(), qui contient ceci :
+-- quand NSScreen.screensHaveSeparateSpaces vaut faux, elle remplace
+-- l'UUID de l'ecran par la chaine "Main", puis cherche un ecran nomme
+-- "Main" dans la liste des ecrans geres. Mesure sur cette machine :
+--
+--   NSScreen.screensHaveSeparateSpaces = false
+--   hs.screen:getUUID()                = 37D8832A-2D66-...
+--   Display Identifier                 = 37D8832A-2D66-...
+--
+-- La liste ne contient que des UUID. La comparaison echoue toujours et
+-- activeSpaces() renvoie nil : tout ce qui concerne les bureaux
+-- s'eteignait sans un mot des que l'option "Les moniteurs ont des
+-- espaces separes" etait decochee.
+--
+-- data_managedDisplaySpaces() donne la meme information sans passer par
+-- cette identification d'ecran. C'est aussi l'appel unique dont
+-- activeSpaces() se sert une fois PAR ECRAN.
+
 function obj:refreshActiveSpaces()
 
     self.activeSpaceIDs =
+        nil
+
+
+    self.currentSpace =
         nil
 
 
@@ -1652,15 +1680,112 @@ function obj:refreshActiveSpaces()
     end
 
 
-    local par_ecran =
+    local visibles =
+        {}
+
+
+    local compte =
+        0
+
+
+    local principal =
+        nil
+
+
+    local ecrans =
         safeCall(function()
 
-            return spaces.activeSpaces()
+            return spaces.data_managedDisplaySpaces()
 
         end)
 
 
-    if type(par_ecran) ~= "table" then
+    if type(ecrans) == "table" then
+
+        local uuidPrincipal =
+            safeCall(function()
+
+                return screen.mainScreen():getUUID()
+
+            end)
+
+
+        for _, ecran in ipairs(ecrans) do
+
+            local courant =
+                type(ecran) == "table" and ecran["Current Space"]
+
+
+            local spaceID =
+                type(courant) == "table" and courant.ManagedSpaceID
+
+
+            if type(spaceID) == "number" then
+
+                visibles[spaceID] =
+                    true
+
+
+                compte =
+                    compte + 1
+
+
+                if principal == nil
+                    or ecran["Display Identifier"] == uuidPrincipal then
+
+                    principal =
+                        spaceID
+
+                end
+
+            end
+
+        end
+
+    end
+
+
+    -- Repli sur l'API documentee si la lecture directe disparait un
+    -- jour. Elle souffre du defaut decrit plus haut, mais mieux vaut
+    -- une reponse parfois absente que pas de reponse du tout.
+
+    if compte == 0 then
+
+        local par_ecran =
+            safeCall(function()
+
+                return spaces.activeSpaces()
+
+            end)
+
+
+        if type(par_ecran) == "table" then
+
+            for _, spaceID in pairs(par_ecran) do
+
+                if type(spaceID) == "number" then
+
+                    visibles[spaceID] =
+                        true
+
+
+                    compte =
+                        compte + 1
+
+
+                    principal =
+                        principal or spaceID
+
+                end
+
+            end
+
+        end
+
+    end
+
+
+    if compte == 0 then
 
         self.spacesUsable =
             false
@@ -1671,39 +1796,12 @@ function obj:refreshActiveSpaces()
     end
 
 
-    local visibles =
-        {}
-
-
-    local compte =
-        0
-
-
-    for _, spaceID in pairs(par_ecran) do
-
-        if type(spaceID) == "number" then
-
-            visibles[spaceID] =
-                true
-
-
-            compte =
-                compte + 1
-
-        end
-
-    end
-
-
-    if compte == 0 then
-
-        return self
-
-    end
-
-
     self.activeSpaceIDs =
         visibles
+
+
+    self.currentSpace =
+        principal
 
 
     return self
@@ -1716,29 +1814,7 @@ end
 
 function obj:currentSpaceID()
 
-    if not spaces or not self.spacesUsable then
-
-        return nil
-
-    end
-
-
-    local spaceID =
-        safeCall(function()
-
-            return spaces.activeSpaceOnScreen()
-
-        end)
-
-
-    if type(spaceID) ~= "number" then
-
-        return nil
-
-    end
-
-
-    return spaceID
+    return self.currentSpace
 
 end
 
@@ -1772,21 +1848,18 @@ function obj:isOnOtherSpace(descriptor)
     end
 
 
-    -- Une fenetre reduite ou masquee par Cmd+H n'est posee sur aucun
-    -- bureau visible. Repondre "autre bureau" serait exact au sens du
-    -- WindowServer et faux au sens de l'utilisateur : sa pastille dit
-    -- deja ce qu'il faut savoir.
-
-    if descriptor.minimized or descriptor.hidden then
-
-        descriptor.onOtherSpace =
-            false
-
-
-        return false
-
-    end
-
+    -- Une version precedente ecartait ici les fenetres reduites et
+    -- masquees, en supposant qu'elles n'appartenaient plus a aucun
+    -- bureau. Mesure faite sur une vraie NSWindow :
+    --
+    --   ouverte, visible   spaces=[1]
+    --   REDUITE (Dock)     spaces=[1]
+    --   restauree          spaces=[1]
+    --
+    -- Une fenetre reduite garde son bureau, et unminimize l'y rend :
+    -- l'utilisateur qui tabule dessus se retrouve sur l'autre bureau.
+    -- C'est exactement ce que la pastille doit annoncer, et exactement
+    -- ce que le mode "bring" doit pouvoir eviter.
 
     local liste =
         safeCall(function()
@@ -6979,6 +7052,25 @@ function obj:commit()
     -- fenetres etaient listees dans la grille sans qu'on puisse les
     -- atteindre.
 
+    local ailleurs =
+        self:isOnOtherSpace(selected) == true
+
+
+    -- Le deplacement passe avant tout ce qui reveille la fenetre.
+    -- Demasquer l'application ou restaurer la fenetre d'abord fait
+    -- basculer macOS vers son bureau : precisement ce que le mode
+    -- "bring" cherche a eviter. C'est aussi l'ordre retenu par
+    -- Sanyam-G/switch, qui appelle CGSMoveWindowsToManagedSpace avant
+    -- toute activation.
+
+    if ailleurs then
+
+        ailleurs =
+            self:resolveCrossSpace(selected)
+
+    end
+
+
     if selected.hidden and selected.application then
 
         safeCall(function()
@@ -6990,23 +7082,11 @@ function obj:commit()
     end
 
 
-    local ailleurs =
-        self:isOnOtherSpace(selected) == true
-
-
     safeCall(function()
 
         selected.window:unminimize()
 
     end)
-
-
-    if ailleurs then
-
-        ailleurs =
-            self:resolveCrossSpace(selected)
-
-    end
 
 
     safeCall(function()
@@ -7052,21 +7132,68 @@ function obj:resolveCrossSpace(selected)
     end
 
 
-    local deplacee =
+    local resultat =
         safeCall(function()
 
-            return spaces.moveWindowToSpace(
-                selected.id,
-                destination
-            )
+            local ok,
+                  err =
+                spaces.moveWindowToSpace(
+                    selected.id,
+                    destination
+                )
+
+
+            return { ok = ok, err = err }
 
         end)
 
 
-    if not deplacee then
+    -- Le retour de l'API ne suffit pas a conclure : on relit la
+    -- position. Une fenetre en plein ecran occupe son propre bureau et
+    -- ne se deplace pas, et rien ne garantit qu'un refus soit toujours
+    -- signale. Ce qui fait foi, c'est ou la fenetre se trouve ensuite.
 
-        -- Une fenetre en plein ecran occupe son propre bureau et ne se
-        -- deplace pas. On laisse macOS y aller.
+    local maintenant =
+        safeCall(function()
+
+            return spaces.windowSpaces(selected.id)
+
+        end)
+
+
+    local arrivee =
+        false
+
+
+    if type(maintenant) == "table" then
+
+        for _, spaceID in ipairs(maintenant) do
+
+            if spaceID == destination then
+
+                arrivee =
+                    true
+
+
+                break
+
+            end
+
+        end
+
+    end
+
+
+    if not arrivee then
+
+        self:log(
+            "Deplacement refuse pour "
+            .. tostring(selected.displayTitle)
+            .. " : "
+            .. tostring(resultat and resultat.err or "raison inconnue")
+            .. ". macOS bascule de bureau a la place."
+        )
+
 
         return true
 
