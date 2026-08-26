@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.8.0"
+obj.version = "1.10.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -100,7 +100,9 @@ obj.logCleanupInterval = 60 * 60
 
 obj.useIgnoredBundlesFile = true
 
-obj.ignoredBundlesFile = nil
+-- false plutot que nil : pour SpoonManager, une cle absente de la
+-- table d'un Spoon signale une faute de frappe dans les reglages.
+obj.ignoredBundlesFile = false
 
 obj.persistMenuChanges = true
 
@@ -1791,6 +1793,71 @@ function obj:countWindows(application)
     end
 
 
+    if count == 0 then
+
+        -- allWindows() ne voit pas les fenetres situees sur un autre
+        -- espace. hs.window.filter le dit dans son propre code :
+        --
+        --   "windows on a different space aren't picked up by
+        --    :allWindows() at first refresh"
+        --
+        -- et s'en sort en interrogeant mainWindow(). Quand une
+        -- application passe en plein ecran, elle prend son propre
+        -- espace et toutes les autres deviennent invisibles a cette
+        -- liste : un zero y etait lu comme "derniere fenetre fermee",
+        -- et l'application etait quittee sans que personne n'ait rien
+        -- ferme.
+        --
+        -- Un zero ne prouve donc rien tant que cette autre voie
+        -- repond encore.
+
+        -- Si la methode n'existe pas, il n'y a rien a recouper : on
+        -- garde le zero plutot que de rendre le comptage indecidable
+        -- pour toujours.
+
+        if type(application.mainWindow) ~= "function" then
+
+            return count
+
+        end
+
+
+        local okMain,
+              mainWindow =
+            pcall(
+                function()
+
+                    return application:mainWindow()
+
+                end
+            )
+
+
+        if not okMain then
+
+            return nil
+
+        end
+
+
+        if mainWindow then
+
+            self:log(
+                "Comptage indecidable pour "
+                .. tostring(self:appDisplayName(
+                    self:appInfoFromApplication(application)))
+                .. " : liste de fenetres vide mais fenetre principale presente",
+                true
+            )
+
+
+            return nil
+
+        end
+
+    end
+
+
     return count
 
 end
@@ -2688,6 +2755,14 @@ function obj:confirmAndQuit(bundleID, name)
     end
 
 
+    -- Relevee avant la fermeture : interroger une application morte
+    -- fait ecrire "Unable to fetch NSRunningApplication" par la couche
+    -- C, une ligne d'erreur pour rien juste apres chaque quit.
+
+    local etiquette =
+        self:appLogLabel(appInfo)
+
+
     local ok,
           result =
         pcall(
@@ -2702,7 +2777,7 @@ function obj:confirmAndQuit(bundleID, name)
     self:log(
         string.format(
             "Quit execute pour %s : %s",
-            self:appLogLabel(appInfo),
+            etiquette,
             tostring(ok and result ~= false)
         ),
         true
@@ -4767,6 +4842,18 @@ function obj:bindHotkeys(mapping)
         mapping
 
 
+    -- Rien n'est lie tant que le Spoon ne tourne pas. Sans cette
+    -- garde, declarer les raccourcis depuis SpoonManager les rendrait
+    -- actifs alors meme que le Spoon est desactive : ses touches
+    -- piloteraient un Spoon eteint.
+
+    if not self.running then
+
+        return self
+
+    end
+
+
     return self:applyHotkeys()
 
 end
@@ -4831,9 +4918,12 @@ function obj:start()
 
     self:mergePersistentSettings()
 
-    -- bindHotkeys() est appele avant start() : on reapplique une fois
-    -- les reglages connus, sinon hotkeysEnabled n'aurait aucun effet
-    -- au demarrage.
+    -- Marque avant d'appliquer : bindHotkeys() ne lie rien tant que le
+    -- Spoon ne tourne pas, et applyHotkeys() a besoin des reglages,
+    -- donc de venir apres mergePersistentSettings().
+    self.running =
+        true
+
     self:applyHotkeys()
 
     self:reloadIgnoredBundlesFile()
@@ -4854,9 +4944,6 @@ function obj:start()
 
     self:updateMenuBar()
 
-    self.running =
-        true
-
     self:log(
         "Spoon initialise",
         true
@@ -4875,6 +4962,12 @@ function obj:stop()
 
     self.running =
         false
+
+
+    -- Les raccourcis survivaient a l'arret : ils pilotaient un Spoon
+    -- eteint.
+
+    self:deleteHotkeys()
 
 
     for _, pending in pairs(self.pendingQuits) do

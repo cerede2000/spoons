@@ -119,6 +119,7 @@ hs.host.idleTime = realIdle
 
 for name, fn in pairs(realSenders) do obj[name] = fn end
 
+obj.running = true          -- bindHotkeys ne lie que si le Spoon tourne
 R.section("Raccourcis pilotés par table")
 local MAP = { toggle={{"ctrl","alt","cmd"},"J"}, menu={{"ctrl","alt","cmd"},"M"},
               status={{"ctrl","alt","cmd"},"U"}, test={{"ctrl","alt","cmd"},"T"} }
@@ -157,5 +158,25 @@ pos = { x = 900, y = 400 }        -- mouvement réel de l'utilisateur
 ctl.fireTimers()
 R.check("le curseur reste là où l'utilisateur l'a mis (x)", pos.x, 900)
 R.check("le curseur reste là où l'utilisateur l'a mis (y)", pos.y, 400)
+
+
+
+------------------------------------------------------------
+R.section("Un Spoon arrêté ne lie aucun raccourci")
+------------------------------------------------------------
+obj:deleteHotkeys()
+obj.running = false
+obj.hotkeysEnabled = true
+obj:bindHotkeys({ toggle = {{"ctrl"}, "J"} })
+local lies = 0
+for _ in pairs(obj.hotkeys or {}) do lies = lies + 1 end
+R.check("rien n'est lié", lies, 0)
+R.check("mapping mémorisé", obj.hotkeyMapping ~= nil, true)
+
+obj.running = true
+obj:applyHotkeys()
+lies = 0
+for _ in pairs(obj.hotkeys or {}) do lies = lies + 1 end
+R.check("le démarrage les applique", lies, 1)
 
 R.finish()

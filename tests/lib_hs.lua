@@ -357,6 +357,14 @@ function M.app(ctl, opts)
         return a._windows
     end
     a.kill = function() table.insert(ctl.killed, a._name); return true end
+    -- mainWindow voit les fenetres des autres espaces, la ou allWindows
+    -- renvoie une liste vide. opts.hiddenBySpace simule ce cas.
+    a.mainWindow = function()
+        if a._dead then return nil end
+        if opts.hiddenBySpace then return opts.hiddenBySpace end
+        if ctl.axMode == "vide" then return nil end
+        return a._windows[1]
+    end
     a._hidden = opts.hidden == true
     a.isHidden = function() return a._hidden end
     a.unhide = function() a._hidden = false; table.insert(ctl.unhidden, a._name); return true end

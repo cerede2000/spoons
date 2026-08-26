@@ -8,6 +8,8 @@ io.write = function(s) out((s:gsub("\n$",""))) end
 obj.logToFile=false; obj.logFile="/dev/null"; obj.verboseLogging=false
 local KEY = "LastWindowQuits.settings"
 
+obj.running = true          -- bindHotkeys ne lie que si le Spoon tourne
+
 R.section("init.lua fait autorité sur les réglages simples")
 ctl.store[KEY] = { enabled=true, logToFile=false, quitDelay=5,
                    verboseLogging=false, blacklistAppNames={["App Persistee"]=true} }
@@ -116,5 +118,27 @@ R.check("startedAt effacé", obj.startedAt, nil)
 R.check("seenApps vidé", next(obj.seenApps), nil)
 R.check("clickCount remis à zéro", obj.clickCount, 0)
 R.check("copyTable retirée", type(obj.copyTable), "nil")
+
+
+
+------------------------------------------------------------
+R.section("Un Spoon arrêté ne lie aucun raccourci")
+-- Déclarer les raccourcis depuis SpoonManager ne doit pas les rendre
+-- actifs alors que le Spoon est désactivé : ses touches piloteraient
+-- un Spoon éteint.
+------------------------------------------------------------
+obj:deleteHotkeys()
+obj.running = false
+obj.hotkeysEnabled = true
+obj:bindHotkeys(MAP)
+R.check("rien n'est lié", nb(), 0)
+R.check("mais le mapping est mémorisé", obj.hotkeyMapping ~= nil, true)
+
+obj.running = true
+obj:applyHotkeys()
+R.check("le démarrage les applique", nb(), 5)
+
+obj:stop()
+R.check("l'arrêt les délie", nb(), 0)
 
 R.finish()

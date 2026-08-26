@@ -160,4 +160,50 @@ R.check("libellé avec bundleID",
 R.check("sans bundleID : nom seul", obj:appLogLabel({name="Sans bundle"}), "Sans bundle")
 R.check("sans rien", obj:appLogLabel(nil), "Application inconnue")
 
+
+
+------------------------------------------------------------
+R.section("Plein écran : une liste de fenêtres vide ne prouve rien")
+-- hs.window.filter le dit dans son propre code : « windows on a
+-- different space aren't picked up by :allWindows() at first refresh ».
+-- Quand une application passe en plein écran elle prend son propre
+-- espace, et toutes les autres deviennent invisibles à cette liste.
+-- Un zéro y était lu comme « dernière fenêtre fermée », et Notes ou
+-- Claude étaient quittées sans que personne n'ait rien fermé.
+------------------------------------------------------------
+local fenetreAilleurs = lib.window({ id = 900 })
+local surAutreEspace = lib.app(ctl, {
+    name = "Notes", bundle = "com.apple.Notes",
+    windows = {},                       -- allWindows() ne voit rien
+    hiddenBySpace = fenetreAilleurs,    -- mais mainWindow() répond
+})
+R.check("comptage indécidable, pas zéro", obj:countWindows(surAutreEspace), nil)
+
+local vraimentVide = lib.app(ctl, {
+    name = "Vide", bundle = "com.exemple.vide", windows = {},
+})
+R.check("une application réellement sans fenêtre compte zéro",
+    obj:countWindows(vraimentVide), 0)
+
+local avecFenetre = lib.app(ctl, {
+    name = "Avec", bundle = "com.exemple.avec",
+    windows = { lib.window({ id = 901 }) },
+})
+R.check("le comptage ordinaire est intact", obj:countWindows(avecFenetre), 1)
+
+R.section("La vérification n'a lieu que sur un zéro")
+ctl.axCalls = 0
+obj:countWindows(avecFenetre)
+R.check("aucun appel supplémentaire quand il y a des fenêtres", ctl.axCalls, 1)
+
+R.section("Une API absente ne désactive pas le comptage")
+local ancienne = lib.app(ctl, { name = "Ancienne", bundle = "com.x", windows = {} })
+ancienne.mainWindow = nil
+R.check("zéro conservé faute de recoupement", obj:countWindows(ancienne), 0)
+
+R.section("Une erreur de lecture rend le comptage indécidable")
+local muette = lib.app(ctl, { name = "Muette", bundle = "com.y", windows = {} })
+muette.mainWindow = function() error("AX muette") end
+R.check("indécidable plutôt que zéro", obj:countWindows(muette), nil)
+
 R.finish()

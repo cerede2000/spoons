@@ -21,7 +21,7 @@ obj.__index = obj
 
 obj.name = "SpoonManager"
 
-obj.version = "1.3.0"
+obj.version = "2.0.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -43,6 +43,11 @@ obj.showNotifications = true
 
 obj.spoons = {}
 
+-- Un reglage dont la cle n'existe pas dans le Spoon est presque
+-- toujours une faute de frappe. Sans avertissement elle ne fait rien et
+-- ne dit rien : on croit avoir regle quelque chose.
+obj.warnUnknownSettings = true
+
 
 
 ------------------------------------------------------------
@@ -57,6 +62,9 @@ obj.enabledSpoons = nil
 -- persiste : un echec transitoire ne doit pas se transformer en
 -- preference enregistree et empecher le Spoon de redemarrer.
 obj.failedSpoons = {}
+
+-- Spoons que setup() n'a pas pu charger, par identifiant.
+obj.missingSpoons = {}
 
 
 
@@ -327,6 +335,278 @@ function obj:isEnabled(item)
 
 
     return self.enabledSpoons[item.id] == true
+
+end
+
+
+
+------------------------------------------------------------
+-- CHARGEMENT ET REGLAGES
+------------------------------------------------------------
+
+-- Charge un Spoon sans laisser une erreur emporter la configuration
+-- entiere. Un dossier manquant ne doit couter que ce Spoon.
+
+function obj:loadSpoon(id)
+
+    if spoon and spoon[id] then
+
+        return spoon[id]
+
+    end
+
+
+    local ok,
+          err =
+        pcall(hs.loadSpoon, id)
+
+
+    if ok and spoon and spoon[id] then
+
+        return spoon[id]
+
+    end
+
+
+    self.missingSpoons[id] =
+        true
+
+
+    self:log(
+        "Spoon indisponible : "
+        .. tostring(id)
+        .. (err and (" - " .. tostring(err)) or "")
+    )
+
+
+    return nil
+
+end
+
+
+-- Une table indexee est remplacee, une table associative est fusionnee.
+-- Fusionner une liste n'aurait pas de sens : on ne surcharge pas son
+-- troisieme element, on la redonne en entier.
+
+local function isList(value)
+
+    return type(value) == "table"
+        and #value > 0
+
+end
+
+
+function obj:applySetting(target, key, value, path)
+
+    local current =
+        target[key]
+
+
+    if type(value) == "table"
+        and type(current) == "table"
+        and not isList(value)
+        and not isList(current) then
+
+        for subKey, subValue in pairs(value) do
+
+            self:applySetting(
+                current,
+                subKey,
+                subValue,
+                path .. "." .. tostring(subKey)
+            )
+
+        end
+
+
+        return
+
+    end
+
+
+    if current == nil and self.warnUnknownSettings then
+
+        -- La valeur est tout de meme posee : on n'ecarte jamais
+        -- silencieusement ce que l'utilisateur a demande.
+
+        self:log(
+            "Option inconnue : " .. path
+        )
+
+    end
+
+
+    target[key] =
+        value
+
+end
+
+
+function obj:applySettings(id, settings)
+
+    if type(settings) ~= "table" then
+
+        return self
+
+    end
+
+
+    local target =
+        spoon and spoon[id]
+
+
+    if not target then
+
+        return self
+
+    end
+
+
+    for key, value in pairs(settings) do
+
+        self:applySetting(
+            target,
+            key,
+            value,
+            tostring(id) .. "." .. tostring(key)
+        )
+
+    end
+
+
+    return self
+
+end
+
+
+-- Accesseur d'icone deduit : un Spoon qui expose setMenuBarVisible a
+-- une icone pilotable. Le declarer a la main dans init.lua n'apprenait
+-- rien de plus et se demodait des qu'un Spoon en gagnait ou en perdait.
+
+function obj:deriveIconAccessor(id)
+
+    local target =
+        spoon and spoon[id]
+
+
+    if not target
+        or type(target.setMenuBarVisible) ~= "function" then
+
+        return nil
+
+    end
+
+
+    return {
+
+        get = function()
+
+            return target.showMenuBar == true
+
+        end,
+
+        set = function(visible)
+
+            target:setMenuBarVisible(visible)
+
+        end,
+
+    }
+
+end
+
+
+-- Charge, regle, branche les raccourcis, inscrit, puis demarre selon
+-- l'etat memorise. C'est le point d'entree unique : init.lua declare,
+-- ce Spoon execute.
+
+function obj:setup(list)
+
+    self.missingSpoons =
+        {}
+
+
+    local entries =
+        {}
+
+
+    for _, item in ipairs(list or {}) do
+
+        if type(item) == "table" and type(item.id) == "string" then
+
+            local loaded =
+                self:loadSpoon(item.id)
+
+
+            if loaded then
+
+                self:applySettings(item.id, item.settings)
+
+
+                if type(item.hotkeys) == "table"
+                    and type(loaded.bindHotkeys) == "function" then
+
+                    local ok,
+                          err =
+                        pcall(function()
+
+                            loaded:bindHotkeys(item.hotkeys)
+
+                        end)
+
+
+                    if not ok then
+
+                        self:log(
+                            "Erreur raccourcis "
+                            .. tostring(item.id)
+                            .. " : " .. tostring(err)
+                        )
+
+                    end
+
+                end
+
+
+                local entry =
+                    {
+                        id = item.id,
+                        label = item.label or item.id,
+                        defaultEnabled = item.defaultEnabled ~= false,
+                        icon = item.icon or self:deriveIconAccessor(item.id),
+                    }
+
+
+                -- Sans consigne particuliere, demarrer et arreter un
+                -- Spoon, c'est appeler ses propres methodes.
+
+                entry.start =
+                    item.start
+                    or (type(loaded.start) == "function"
+                        and function() loaded:start() end)
+                    or nil
+
+
+                entry.stop =
+                    item.stop
+                    or (type(loaded.stop) == "function"
+                        and function() loaded:stop() end)
+                    or nil
+
+
+                table.insert(entries, entry)
+
+            end
+
+        end
+
+    end
+
+
+    self:registerSpoons(entries)
+
+
+    return self:start()
 
 end
 

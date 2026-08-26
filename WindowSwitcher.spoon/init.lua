@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.17.1"
+obj.version = "0.17.2"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -84,7 +84,9 @@ obj.minWindowWidth = 80
 
 obj.minWindowHeight = 60
 
-obj.ignoredBundlesFile = nil
+-- false plutot que nil : pour SpoonManager, une cle absente de la
+-- table d'un Spoon signale une faute de frappe dans les reglages.
+obj.ignoredBundlesFile = false
 
 obj.maxColumns = 4
 
@@ -317,9 +319,13 @@ obj.maxConcurrentScreenCaptures = 2
 
 obj.enableMouseSelection = true
 
-obj.screenCaptureHelperPath = nil
+-- false plutot que nil : pour SpoonManager, une cle absente de la
+-- table d'un Spoon signale une faute de frappe dans les reglages.
+obj.screenCaptureHelperPath = false
 
-obj.screenCaptureHelperAppPath = nil
+-- false plutot que nil : pour SpoonManager, une cle absente de la
+-- table d'un Spoon signale une faute de frappe dans les reglages.
+obj.screenCaptureHelperAppPath = false
 
 obj.screenCapturePixelHeight = 420
 
@@ -6191,6 +6197,9 @@ function obj:bindHotkeys(mapping)
     self.hotkeyMapping =
         mapping or {}
 
+
+    -- Rien n'est lie tant que le Spoon ne tourne pas : createHotkeys()
+    -- est rappele par start().
 
     if self.isStarted then
 

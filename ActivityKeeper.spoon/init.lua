@@ -146,7 +146,7 @@ obj.__index = obj
 
 obj.name = "ActivityKeeper"
 
-obj.version = "4.13.0"
+obj.version = "4.14.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -7019,6 +7019,18 @@ function obj:bindHotkeys(mapping)
         mapping
 
 
+    -- Rien n'est lie tant que le Spoon ne tourne pas. Sans cette
+    -- garde, declarer les raccourcis depuis SpoonManager les rendrait
+    -- actifs alors meme que le Spoon est desactive : ses touches
+    -- piloteraient un Spoon eteint.
+
+    if not self.running then
+
+        return self
+
+    end
+
+
     return self:applyHotkeys()
 
 end
@@ -7057,6 +7069,10 @@ end
 
 function obj:start(enableImmediately)
 
+    self.running =
+        true
+
+
     self:applyConfiguredModeDefaults()
 
 
@@ -7085,6 +7101,16 @@ function obj:start(enableImmediately)
     --------------------------------------------------------
 
     self:createInputWatcher()
+
+
+    --------------------------------------------------------
+    -- Raccourcis
+    --
+    -- bindHotkeys() ne lie rien tant que le Spoon ne tourne pas : ils
+    -- sont appliques ici, une fois les reglages connus.
+    --------------------------------------------------------
+
+    self:applyHotkeys()
 
 
     --------------------------------------------------------
@@ -7152,6 +7178,10 @@ end
 ------------------------------------------------------------
 
 function obj:stop()
+
+    self.running =
+        false
+
 
     --------------------------------------------------------
     -- Bulle éventuellement affichée
