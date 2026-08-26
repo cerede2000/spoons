@@ -89,12 +89,11 @@ spoon.WindowSwitcher.mouseActivationDistance = 6
 spoon.WindowSwitcher.focusReassertDelay = 0.12
 spoon.WindowSwitcher.snapshotBudgetSeconds = 0.045
 spoon.WindowSwitcher.showStateBadges = true
-spoon.WindowSwitcher.badgeMinimized = "⤓"
-spoon.WindowSwitcher.badgeHidden = "⦸"
 spoon.WindowSwitcher.showAudioBadges = true
-spoon.WindowSwitcher.badgeAudio = "♪"
-spoon.WindowSwitcher.badgeMicrophone = "◉"
+spoon.WindowSwitcher.showCloseButton = true
+spoon.WindowSwitcher.enableCloseKey = true
 spoon.WindowSwitcher.helperLaunchMode = "task"
+spoon.WindowSwitcher.helperIdleGraceSeconds = 6
 spoon.WindowSwitcher.enableCancelKey = true
 spoon.WindowSwitcher.enableWindowPreview = true
 spoon.WindowSwitcher.previewDelay = 0.65
@@ -113,8 +112,8 @@ la fenetre : elles ne coutent qu'un element de dessin.
 Les deux autres viennent du service, par l'API publique CoreAudio des
 objets de processus (`kAudioProcessPropertyIsRunningOutput` et
 `IsRunningInput`, macOS 14.4+). Une seule demande par session, qui ne
-touche ni le disque ni ScreenCaptureKit. La contrepartie est que le
-service reste en vie une trentaine de secondes apres chaque switch :
+touche ni le disque ni ScreenCaptureKit.
+
 `showAudioBadges = false` supprime la demande **et** les pastilles.
 
 **La camera n'a pas d'equivalent.** CMIO expose les peripheriques, pas
@@ -127,8 +126,37 @@ informatives, et aucune n'est modifiable. Les applications qui y
 parviennent installent un pilote audio virtuel, c'est-a-dire une
 extension systeme.
 
-Tous les glyphes sont configurables. `showStateBadges = false` retire
-les pastilles de fenetre.
+Chaque nature a sa couleur pleine, un glyphe blanc et un lisere clair
+qui la detache du fond. Une pastille sombre translucide sur une vignette
+sombre ne se voyait pas.
+
+```lua
+spoon.WindowSwitcher.badges.minimized.glyph = "▼"
+spoon.WindowSwitcher.badges.minimized.color = { red = 0.98, green = 0.62, blue = 0.09, alpha = 0.97 }
+```
+
+`showStateBadges = false` retire les pastilles de fenetre,
+`showAudioBadges = false` celles du son.
+
+### Fermer une fenetre
+
+Une croix rouge apparait dans le coin de la vignette **visee**, et
+seulement quand la souris est en jeu : au clavier elle n'aurait aucune
+cible, et affichee sur toutes les tuiles elle encombrerait la grille.
+Sa cible de clic est posee apres celle de la tuile, donc elle recoit le
+clic en premier — sans quoi la croix activerait la fenetre au lieu de
+la fermer.
+
+Au clavier, `W` ferme la fenetre visee. La session continue tant qu'il
+reste des fenetres ; fermer la derniere la termine.
+
+Si l'application refuse la fermeture, la tuile reste en place et le
+motif est journalise.
+
+```lua
+spoon.WindowSwitcher.showCloseButton = false
+spoon.WindowSwitcher.enableCloseKey = false
+```
 
 ### Annuler
 
@@ -286,6 +314,22 @@ secret, et refuse d'ecrire ailleurs que dans le sous-repertoire
 
 Le service se termine seul apres 30 secondes sans requete. Le Spoon le
 detecte par son identifiant de bundle et le relance a la demande.
+
+### Duree de vie du service
+
+Mesure sur une machine Apple Silicon : le service au repos occupe
+**31 Mo residents** et environ 0,5 % de processeur, et un demarrage a
+froid coute **500 ms** jusqu'a la premiere reponse.
+
+Il s'arrete tout seul apres 30 s sans requete. Comme l'inventaire audio
+lui est demande a chaque switch, ce delai le laisserait en vie
+pratiquement toute la journee. Le Spoon l'arrete donc lui-meme des qu'il
+n'a plus rien a faire, apres `helperIdleGraceSeconds`.
+
+Une rafale de switchs rapproches reutilise le meme processus ; un switch
+isole paie un relancement, qui n'est sur le chemin critique de rien
+puisque captures et inventaire sont asynchrones. Mettre ce delai a `0`
+rend la main a l'auto-extinction du service.
 
 ### Emplacement des fichiers
 

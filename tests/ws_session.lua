@@ -27,6 +27,7 @@ local function nouvelleSession()
     obj.titleCache = {}
     obj.snapshotCache = {}
     obj.modifierTap = nil
+    obj.sessionKeyTap = nil
     obj.modifierTimer = nil
     obj.redrawTimer = nil
     ctl.eventtaps = {}
@@ -311,9 +312,9 @@ R.check("fenêtre ordinaire : aucune pastille",
 R.check("réduite : une pastille",
     #obj:stateBadges({ id = 2, minimized = true }), 1)
 R.check("le glyphe est celui configuré",
-    obj:stateBadges({ id = 2, minimized = true })[1], obj.badgeMinimized)
+    obj:stateBadges({ id = 2, minimized = true })[1].glyph, obj.badges.minimized.glyph)
 R.check("masquée : une pastille",
-    obj:stateBadges({ id = 3, hidden = true })[1], obj.badgeHidden)
+    obj:stateBadges({ id = 3, hidden = true })[1].glyph, obj.badges.hidden.glyph)
 R.check("réduite et masquée : deux pastilles",
     #obj:stateBadges({ id = 4, minimized = true, hidden = true }), 2)
 
@@ -326,9 +327,9 @@ R.section("Pastilles son et micro")
 obj.audioPIDs = { [4242] = true }
 obj.microphonePIDs = { [777] = true }
 R.check("application qui joue : pastille son",
-    obj:stateBadges({ id = 8, pid = 4242 })[1], obj.badgeAudio)
+    obj:stateBadges({ id = 8, pid = 4242 })[1].glyph, obj.badges.audio.glyph)
 R.check("application qui capte : pastille micro",
-    obj:stateBadges({ id = 9, pid = 777 })[1], obj.badgeMicrophone)
+    obj:stateBadges({ id = 9, pid = 777 })[1].glyph, obj.badges.microphone.glyph)
 R.check("une autre application : rien",
     #obj:stateBadges({ id = 10, pid = 1 }), 0)
 R.check("sans pid : rien",
@@ -336,7 +337,8 @@ R.check("sans pid : rien",
 R.check("réduite et sonore : deux pastilles",
     #obj:stateBadges({ id = 12, pid = 4242, minimized = true }), 2)
 R.check("l'état de fenêtre passe avant le son",
-    obj:stateBadges({ id = 13, pid = 4242, minimized = true })[1], obj.badgeMinimized)
+    obj:stateBadges({ id = 13, pid = 4242, minimized = true })[1].glyph,
+    obj.badges.minimized.glyph)
 
 obj.showAudioBadges = false
 R.check("pastilles son désactivables séparément",
@@ -357,10 +359,120 @@ R.check("la seconde est décalée",
     els[3].frame.x, 106 + obj.badgeSize + obj.badgeGap)
 R.check("elles restent dans la vignette",
     els[3].frame.x + obj.badgeSize < 100 + 200, true)
+R.check("chaque pastille a sa couleur", els[1].fillColor, obj.badges.minimized.color)
+R.check("couleurs distinctes selon la nature",
+    els[3].fillColor ~= els[1].fillColor, true)
+R.check("un liseré la détache du fond", els[1].action, "strokeAndFill")
 
 local vides = {}
 obj:badgeElements(vides, { id = 7 }, { x = 0, y = 0, w = 100, h = 100 })
 R.check("aucun élément pour une fenêtre ordinaire", #vides, 0)
+
+------------------------------------------------------------
+R.section("Fermer une fenêtre depuis le switcher")
+------------------------------------------------------------
+nouvelleSession()
+local ferme = {}
+for _, w in ipairs({ w1, w2, w3 }) do
+    w.close = function() table.insert(ferme, w.id()) ; return true end
+end
+obj:step(1)
+R.check("trois tuiles", #obj.entries, 3)
+local cible = obj.entries[2].id
+obj:closeEntry(2)
+R.check("la fenêtre est fermée", ferme[1], cible)
+R.check("la tuile disparaît", #obj.entries, 2)
+R.check("la session continue", obj.entries ~= nil, true)
+R.check("aucune de celles qui restent n'a été fermée", #ferme, 1)
+
+R.section("Fermer la dernière ferme la session")
+ferme = {}
+obj:closeEntry(1)
+obj:closeEntry(1)
+R.check("plus de session", obj.entries, nil)
+R.check("les deux ont été fermées", #ferme, 2)
+
+R.section("Un refus de l'application laisse la tuile en place")
+nouvelleSession()
+for _, w in ipairs({ w1, w2, w3 }) do w.close = function() return false end end
+obj:step(1)
+local avant = #obj.entries
+ctl.printed = {}
+obj:closeEntry(1)
+R.check("la tuile reste", #obj.entries, avant)
+R.check("le refus est journalisé",
+    table.concat(ctl.printed, " "):find("Fermeture refusee", 1, true) ~= nil, true)
+obj:commit()
+
+R.section("La sélection ne sort pas de la liste")
+nouvelleSession()
+for _, w in ipairs({ w1, w2, w3 }) do w.close = function() return true end end
+obj:step(1)
+obj.selectedIndex = 3
+obj:closeEntry(3)
+R.check("sélection ramenée dans la liste", obj.selectedIndex, 2)
+R.check("deux tuiles restantes", #obj.entries, 2)
+obj:commit()
+
+R.section("W ferme au clavier")
+nouvelleSession()
+ferme = {}
+for _, w in ipairs({ w1, w2, w3 }) do
+    w.close = function() table.insert(ferme, w.id()) ; return true end
+end
+obj:step(1)
+local tapClavier
+for _, t in ipairs(ctl.eventtaps) do
+    if t.types and t.types[1] == "keyDown" then tapClavier = t end
+end
+local vise = obj.entries[obj.selectedIndex].id
+local mange = tapClavier.fn({ getKeyCode = function() return obj:closeKeyCode() end })
+R.check("la touche est consommée", mange, true)
+R.check("la fenêtre visée est fermée", ferme[1], vise)
+R.check("la session continue", obj.entries ~= nil, true)
+
+obj.enableCloseKey = false
+local passe = tapClavier.fn({ getKeyCode = function() return obj:closeKeyCode() end })
+R.check("désactivable : la touche passe", passe, false)
+obj.enableCloseKey = true
+obj:commit()
+
+R.section("La croix n'apparaît que sur la tuile visée, à la souris")
+local els2 = {}
+obj.mouseArmed = false
+obj:closeButtonElements(els2, { index = 1 }, { x = 0, y = 0, w = 200, h = 150 }, true)
+R.check("souris inactive : aucune croix", #els2, 0)
+
+obj.mouseArmed = true
+obj:closeButtonElements(els2, { index = 1 }, { x = 0, y = 0, w = 200, h = 150 }, false)
+R.check("tuile non visée : aucune croix", #els2, 0)
+
+obj:closeButtonElements(els2, { index = 1 }, { x = 0, y = 0, w = 200, h = 150 }, true)
+R.check("tuile visée : rond, glyphe et cible", #els2, 3)
+R.check("placée en haut à droite de la vignette",
+    els2[1].frame.x, 200 - obj.closeButtonSize - 6)
+R.check("la cible porte son identifiant", els2[3].id, "close:1")
+R.check("elle est cliquable", els2[3].trackMouseUp, true)
+
+obj.showCloseButton = false
+local els3 = {}
+obj:closeButtonElements(els3, { index = 1 }, { x = 0, y = 0, w = 200, h = 150 }, true)
+R.check("désactivable", #els3, 0)
+obj.showCloseButton = true
+obj.mouseArmed = false
+
+R.section("Un clic sur la croix ferme, un clic ailleurs active")
+nouvelleSession()
+ferme = {}
+for _, w in ipairs({ w1, w2, w3 }) do
+    w.close = function() table.insert(ferme, w.id()) ; return true end
+end
+obj:step(1)
+local visee = obj.entries[1].id
+obj:handleMouseEvent("mouseUp", "close:1")
+R.check("la croix ferme", ferme[1], visee)
+R.check("sans activer la fenêtre", obj.entries ~= nil, true)
+obj:commit()
 
 R.section("Les canvas sont alloués au démarrage, pas au premier switch")
 obj.isStarted = false

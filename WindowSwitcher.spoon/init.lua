@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.13.0"
+obj.version = "0.14.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -122,25 +122,62 @@ obj.textSize = 15
 -- distinguait jusqu'ici une fenetre reduite d'une fenetre visible.
 obj.showStateBadges = true
 
-obj.badgeSize = 19
+obj.badgeSize = 23
 
-obj.badgeTextSize = 12
+obj.badgeTextSize = 14
 
-obj.badgeGap = 4
+obj.badgeGap = 5
 
-obj.badgeMinimized = "⤓"
+obj.badgeStrokeWidth = 1.5
 
-obj.badgeHidden = "⦸"
+-- Une pastille sombre translucide sur une vignette sombre ne se voyait
+-- pas. Chaque nature a desormais sa couleur pleine, un glyphe blanc et
+-- un lisere clair qui la detache du fond, quel que soit le contenu de
+-- la vignette.
+obj.badges = {
+    minimized = {
+        glyph = "▼",
+        color = {
+            red = 0.98,
+            green = 0.62,
+            blue = 0.09,
+            alpha = 0.97,
+        },
+    },
+    hidden = {
+        glyph = "⦸",
+        color = {
+            red = 0.55,
+            green = 0.44,
+            blue = 0.87,
+            alpha = 0.97,
+        },
+    },
+    audio = {
+        glyph = "♪",
+        color = {
+            red = 0.16,
+            green = 0.55,
+            blue = 0.96,
+            alpha = 0.97,
+        },
+    },
+    microphone = {
+        glyph = "●",
+        color = {
+            red = 0.91,
+            green = 0.26,
+            blue = 0.24,
+            alpha = 0.97,
+        },
+    },
+}
 
 -- Quelle application joue du son, laquelle capte le micro. L'inventaire
 -- vient du service, par l'API publique CoreAudio des objets de
 -- processus. Le demander maintient le service en vie une trentaine de
 -- secondes apres chaque switch : le couper si c'est de trop.
 obj.showAudioBadges = true
-
-obj.badgeAudio = "♪"
-
-obj.badgeMicrophone = "◉"
 
 -- "task" lance le service comme enfant de Hammerspoon : macOS attribue
 -- alors ses acces au processus responsable, c'est-a-dire Hammerspoon.
@@ -152,10 +189,42 @@ obj.badgeMicrophone = "◉"
 -- compte. A garder si l'attribution par parent ne fonctionne pas.
 obj.helperLaunchMode = "task"
 
+-- Le service coute 31 Mo residents et sonde son repertoire toutes les
+-- 0,35 s. Il s'arrete tout seul, mais au bout de 30 s : avec les
+-- pastilles audio demandees a chaque switch, il resterait en vie
+-- pratiquement toute la journee.
+--
+-- On l'arrete donc nous-memes des qu'il n'y a plus rien a faire. Une
+-- rafale de switchs rapproches reutilise le meme processus ; un switch
+-- isole paie un relancement, mesure a 500 ms, qui n'est sur le chemin
+-- critique de rien puisque captures et inventaire sont asynchrones.
+obj.helperIdleGraceSeconds = 6
+
 -- Echap ferme le switcher sans rien activer. Un eventtap plutot qu'un
 -- hs.hotkey : pendant un Option+Tab les modificateurs sont enfonces, et
 -- un raccourci sans modificateur ne se declencherait jamais.
 obj.enableCancelKey = true
+
+-- Croix de fermeture dans le coin de la vignette. Elle n'apparait que
+-- sur la tuile visee et seulement quand la souris est en jeu : au
+-- clavier elle n'aurait aucune cible, et affichee partout elle
+-- encombrerait la grille.
+obj.showCloseButton = true
+
+obj.closeButtonSize = 21
+
+obj.closeGlyph = "✕"
+
+obj.closeButtonColor = {
+    red = 0.94,
+    green = 0.27,
+    blue = 0.24,
+    alpha = 0.97,
+}
+
+-- W ferme la fenetre visee au clavier. Le code physique est lu sur la
+-- disposition courante.
+obj.enableCloseKey = true
 
 obj.panelCornerRadius = 24
 
@@ -578,6 +647,8 @@ obj.cachedUserID = nil
 obj.sessionKeyTap = nil
 
 obj.helperTask = nil
+
+obj.helperIdleTimer = nil
 
 obj.audioPIDs = {}
 
@@ -2835,6 +2906,9 @@ function obj:stopScreenCaptureHelperApp()
     end
 
 
+    self:cancelHelperIdleTimer()
+
+
     self.screenCaptureHelperAppStarted =
         false
 
@@ -2987,6 +3061,72 @@ function obj:startScreenCapturePollTimer()
 end
 
 
+function obj:cancelHelperIdleTimer()
+
+    if self.helperIdleTimer then
+
+        self.helperIdleTimer:stop()
+
+
+        self.helperIdleTimer =
+            nil
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:scheduleHelperShutdown()
+
+    self:cancelHelperIdleTimer()
+
+
+    if not self.helperIdleGraceSeconds
+        or self.helperIdleGraceSeconds <= 0 then
+
+        return self
+
+    end
+
+
+    if not self.screenCaptureHelperAppStarted then
+
+        return self
+
+    end
+
+
+    self.helperIdleTimer =
+        timer.doAfter(
+            self.helperIdleGraceSeconds,
+            function()
+
+                self.helperIdleTimer =
+                    nil
+
+
+                if #self.screenCaptureQueue > 0
+                    or self:countRunningScreenCaptures() > 0 then
+
+                    return
+
+                end
+
+
+                self:stopScreenCaptureHelperApp()
+
+            end
+        )
+
+
+    return self
+
+end
+
+
 function obj:stopScreenCapturePollTimerIfIdle()
 
     if self.screenCapturePollTimer
@@ -2996,6 +3136,14 @@ function obj:stopScreenCapturePollTimerIfIdle()
 
         self.screenCapturePollTimer =
             nil
+
+    end
+
+
+    if #self.screenCaptureQueue == 0
+        and self:countRunningScreenCaptures() == 0 then
+
+        self:scheduleHelperShutdown()
 
     end
 
@@ -3524,6 +3672,9 @@ function obj:drainScreenCaptureQueue()
 
         self.queuedScreenCaptures[job.id] =
             nil
+
+
+        self:cancelHelperIdleTimer()
 
 
         if self:startScreenCaptureHelperApp()
@@ -4174,7 +4325,7 @@ function obj:stateBadges(descriptor)
     if descriptor.minimized then
 
         badges[#badges + 1] =
-            self.badgeMinimized
+            self.badges.minimized
 
     end
 
@@ -4182,7 +4333,7 @@ function obj:stateBadges(descriptor)
     if descriptor.hidden then
 
         badges[#badges + 1] =
-            self.badgeHidden
+            self.badges.hidden
 
     end
 
@@ -4192,7 +4343,7 @@ function obj:stateBadges(descriptor)
         if self.audioPIDs[descriptor.pid] then
 
             badges[#badges + 1] =
-                self.badgeAudio
+                self.badges.audio
 
         end
 
@@ -4200,7 +4351,7 @@ function obj:stateBadges(descriptor)
         if self.microphonePIDs[descriptor.pid] then
 
             badges[#badges + 1] =
-                self.badgeMicrophone
+                self.badges.microphone
 
         end
 
@@ -4226,13 +4377,13 @@ function obj:badgeElements(elements, descriptor, thumbFrame)
         thumbFrame.y + 6
 
 
-    for _, glyph in ipairs(badges) do
+    for _, badge in ipairs(badges) do
 
         table.insert(
             elements,
             {
                 type = "rectangle",
-                action = "fill",
+                action = "strokeAndFill",
                 frame = {
                     x = x,
                     y = y,
@@ -4240,7 +4391,9 @@ function obj:badgeElements(elements, descriptor, thumbFrame)
                     h = self.badgeSize,
                 },
                 roundedRectRadii = rounded(math.floor(self.badgeSize / 2)),
-                fillColor = self:themeColor("badgeBackgroundColor"),
+                fillColor = badge.color,
+                strokeColor = self:themeColor("badgeTextColor"),
+                strokeWidth = self.badgeStrokeWidth,
             }
         )
 
@@ -4258,7 +4411,7 @@ function obj:badgeElements(elements, descriptor, thumbFrame)
                 text = safeCall(function()
 
                     return styledtext.new(
-                        glyph,
+                        badge.glyph,
                         {
                             font = {
                                 name = ".AppleSystemUIFont",
@@ -4271,7 +4424,7 @@ function obj:badgeElements(elements, descriptor, thumbFrame)
                         }
                     )
 
-                end) or glyph,
+                end) or badge.glyph,
             }
         )
 
@@ -4488,6 +4641,108 @@ function obj:tileElements(elements, item, offsetX, offsetY)
 
     end
 
+
+    -- Apres la cible de la tuile : les elements plus tardifs recoivent
+    -- le clic en premier, sinon la croix activerait la fenetre au lieu
+    -- de la fermer.
+
+    self:closeButtonElements(elements, item, thumbFrame, isSelected)
+
+end
+
+
+function obj:closeButtonElements(elements, item, thumbFrame, isSelected)
+
+    if not self.showCloseButton
+        or not self.enableMouseSelection
+        or not isSelected
+        or not self.mouseArmed then
+
+        return elements
+
+    end
+
+
+    local size =
+        self.closeButtonSize
+
+
+    local frame =
+        {
+            x = thumbFrame.x + thumbFrame.w - size - 6,
+            y = thumbFrame.y + 6,
+            w = size,
+            h = size,
+        }
+
+
+    table.insert(
+        elements,
+        {
+            type = "rectangle",
+            action = "strokeAndFill",
+            frame = frame,
+            roundedRectRadii = rounded(math.floor(size / 2)),
+            fillColor = self.closeButtonColor,
+            strokeColor = self:themeColor("badgeTextColor"),
+            strokeWidth = self.badgeStrokeWidth,
+        }
+    )
+
+
+    table.insert(
+        elements,
+        {
+            type = "text",
+            frame = {
+                x = frame.x,
+                y = frame.y + math.floor((size - self.badgeTextSize) / 2) - 2,
+                w = size,
+                h = size,
+            },
+            text = safeCall(function()
+
+                return styledtext.new(
+                    self.closeGlyph,
+                    {
+                        font = {
+                            name = ".AppleSystemUIFont",
+                            size = self.badgeTextSize,
+                        },
+                        color = self:themeColor("badgeTextColor"),
+                        paragraphStyle = {
+                            alignment = "center",
+                        },
+                    }
+                )
+
+            end) or self.closeGlyph,
+        }
+    )
+
+
+    table.insert(
+        elements,
+        {
+            id = "close:" .. tostring(item.index),
+            type = "rectangle",
+            action = "fill",
+            frame = {
+                x = frame.x - 3,
+                y = frame.y - 3,
+                w = size + 6,
+                h = size + 6,
+            },
+            roundedRectRadii = rounded(math.floor(size / 2) + 3),
+            fillColor = self:themeColor("hitTargetColor"),
+            trackMouseDown = true,
+            trackMouseUp = true,
+        }
+    )
+
+
+    return elements
+
 end
 
 
@@ -4574,7 +4829,122 @@ function obj:mouseHasMoved()
 end
 
 
+-- Ferme la fenetre visee et retire sa tuile. La session continue s'il
+-- reste des fenetres.
+
+function obj:closeEntry(index)
+
+    local descriptor =
+        self.entries and self.entries[index]
+
+
+    if not descriptor then
+
+        return self
+
+    end
+
+
+    self:hidePreview()
+
+
+    local closed,
+          err =
+        safeCall(function()
+
+            return descriptor.window:close()
+
+        end)
+
+
+    if closed == false or err then
+
+        self:log(
+            "Fermeture refusee pour "
+            .. tostring(descriptor.displayTitle)
+            .. (err and (" : " .. tostring(err)) or "")
+        )
+
+
+        return self
+
+    end
+
+
+    table.remove(self.entries, index)
+
+
+    self.snapshotCache[descriptor.id] =
+        nil
+
+
+    self:discardCaptureFile(descriptor.id)
+
+
+    self.layoutCache =
+        nil
+
+
+    self.titleCache =
+        {}
+
+
+    self.previewIndex =
+        nil
+
+
+    if #self.entries == 0 then
+
+        self:endSession()
+
+
+        return self
+
+    end
+
+
+    if (self.selectedIndex or 1) > #self.entries then
+
+        self.selectedIndex =
+            #self.entries
+
+    end
+
+
+    self:redraw()
+
+
+    return self
+
+end
+
+
+function obj:closeSelected()
+
+    return self:closeEntry(self.selectedIndex)
+
+end
+
+
 function obj:handleMouseEvent(message, elementID)
+
+    local closeIndex =
+        tostring(elementID or ""):match("^close:(%d+)$")
+
+
+    if closeIndex then
+
+        if message == "mouseUp" then
+
+            self:closeEntry(tonumber(closeIndex))
+
+        end
+
+
+        return
+
+    end
+
 
     local index =
         tostring(elementID or ""):match("^tile:(%d+)$")
@@ -5090,6 +5460,32 @@ function obj:cancelKeyCode()
 end
 
 
+function obj:closeKeyCode()
+
+    if self.cachedCloseKeyCode then
+
+        return self.cachedCloseKeyCode
+
+    end
+
+
+    local code =
+        safeCall(function()
+
+            return hs.keycodes.map.w
+
+        end)
+
+
+    self.cachedCloseKeyCode =
+        code or 13
+
+
+    return self.cachedCloseKeyCode
+
+end
+
+
 function obj:ensureSessionKeyTap()
 
     if self.sessionKeyTap then
@@ -5119,6 +5515,17 @@ function obj:ensureSessionKeyTap()
 
                     -- Consomme : l'application dessous ne doit pas
                     -- recevoir l'Echap qui a ferme le switcher.
+
+                    return true
+
+                end
+
+
+                if self.enableCloseKey
+                    and code == self:closeKeyCode() then
+
+                    self:closeSelected()
+
 
                     return true
 

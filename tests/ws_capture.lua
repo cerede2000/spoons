@@ -56,6 +56,7 @@ local function reset()
     obj.audioPIDs = {}
     obj.microphonePIDs = {}
     obj.helperLaunchMode = "task"
+    obj.helperIdleTimer = nil
     ctl.runningApps = { helperApp }
     helperApp._dead = false
 end
@@ -297,6 +298,46 @@ R.check("motif enregistré", obj.screenCaptureDisabledReason ~= nil, true)
 R.check("la file est vidée", #obj.screenCaptureQueue, 0)
 obj:queueScreenCapture(descriptor(53, { minimized = true }))
 R.check("plus aucune mise en file", obj.runningScreenCaptures[53], nil)
+
+------------------------------------------------------------
+R.section("Le service est arrêté dès qu'il n'a plus rien à faire")
+-- Il coûte 31 Mo résidents et sonde son répertoire toutes les 0,35 s.
+-- Son auto-extinction à 30 s le laisserait en vie presque en permanence
+-- puisqu'on lui demande l'inventaire audio à chaque switch.
+------------------------------------------------------------
+reset()
+obj:queueScreenCapture(descriptor(1, { minimized = true }))
+R.check("service lancé", obj.screenCaptureHelperAppStarted, true)
+R.check("aucun arrêt programmé tant qu'il travaille", obj.helperIdleTimer, nil)
+
+obj.runningScreenCaptures = {}
+obj:stopScreenCapturePollTimerIfIdle()
+R.check("arrêt programmé une fois au repos", obj.helperIdleTimer ~= nil, true)
+R.check("après le délai configuré",
+    ctl.timers[#ctl.timers].delay, obj.helperIdleGraceSeconds)
+
+R.section("Une rafale de switchs réutilise le même processus")
+obj:queueScreenCapture(descriptor(2, { minimized = true }))
+R.check("l'arrêt est annulé", obj.helperIdleTimer, nil)
+R.check("toujours un seul lancement", lancements(), 1)
+
+R.section("Au repos, le service est bien arrêté")
+obj.runningScreenCaptures = {}
+obj.screenCaptureQueue = {}
+obj:stopScreenCapturePollTimerIfIdle()
+ctl.fireTimers()
+R.check("plus considéré comme démarré", obj.screenCaptureHelperAppStarted, false)
+R.check("la tâche est relâchée", obj.helperTask, nil)
+
+R.section("Le délai est désactivable")
+reset()
+obj.helperIdleGraceSeconds = 0
+obj:queueScreenCapture(descriptor(3, { minimized = true }))
+obj.runningScreenCaptures = {}
+obj:stopScreenCapturePollTimerIfIdle()
+R.check("aucun arrêt programmé", obj.helperIdleTimer, nil)
+R.check("le service reste en vie", obj.screenCaptureHelperAppStarted, true)
+obj.helperIdleGraceSeconds = 6
 
 ------------------------------------------------------------
 R.section("Inventaire audio : quelle application joue, laquelle écoute")
