@@ -173,13 +173,17 @@ obj.logScreenCaptureFailures = true
 
 obj.stepThrottleSeconds = 0.06
 
--- Seconde passe d'inventaire via hs.window.allWindows(). Elle rattrape
--- les fenetres que le filtre n'a pas encore vues, mais c'est un balayage
--- AX complet de toutes les applications lancees : c'est de loin
--- l'operation la plus couteuse d'une session. La passer a false divise
--- environ par deux le cout d'un Alt+Tab, au risque de manquer une
--- fenetre juste apres un demarrage d'application.
-obj.completeWithAllWindows = true
+-- Seconde passe d'inventaire via hs.window.allWindows() : un balayage
+-- d'accessibilite de toutes les applications lancees, de loin
+-- l'operation la plus couteuse d'une session.
+--
+-- Elle existait parce que le filtre etait reconstruit a froid a chaque
+-- Alt+Tab et pouvait donc etre incomplet. Le filtre est desormais
+-- permanent et tenu a jour par evenements : il est la source de verite,
+-- et cette seconde passe ne rattrape plus rien.
+--
+-- Si une fenetre venait a manquer dans la grille, repasser a true.
+obj.completeWithAllWindows = false
 
 -- Filet de securite derriere l'eventtap flagsChanged. L'ancien code
 -- sondait le clavier toutes les 10 ms pendant toute la duree du switch.

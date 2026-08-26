@@ -78,7 +78,7 @@ spoon.WindowSwitcher.screenCaptureFailureBackoffSeconds = 5
 spoon.WindowSwitcher.screenCaptureRequestTimeoutSeconds = 6.5
 spoon.WindowSwitcher.logScreenCaptureFailures = true
 spoon.WindowSwitcher.stepThrottleSeconds = 0.06
-spoon.WindowSwitcher.completeWithAllWindows = true
+spoon.WindowSwitcher.completeWithAllWindows = false
 spoon.WindowSwitcher.modifierSafetyInterval = 0.35
 spoon.WindowSwitcher.redrawCoalesceSeconds = 0.05
 spoon.WindowSwitcher.mouseActivationDistance = 6
@@ -93,12 +93,18 @@ toutes les applications lancees, et de loin l'operation la plus couteuse
 d'une session. Elle rattrape les fenetres que le filtre n'a pas encore
 vues, typiquement juste apres le demarrage d'une application.
 
-La passer a `false` divise environ par deux le cout d'un `Option+Tab`.
-Le filtre etant desormais permanent et tenu a jour en continu, elle est
-rarement necessaire.
+Elle existait parce que le filtre etait reconstruit a froid a chaque
+`Option+Tab` et pouvait donc etre incomplet. Le filtre est desormais
+permanent et tenu a jour par evenements : il est la source de verite, et
+cette seconde passe ne rattrape plus rien. Elle est donc **desactivee
+par defaut** depuis la 0.9.0, ce qui divise environ par deux le cout
+d'un `Option+Tab`.
+
+C'est le seul changement de la 0.9.0 qui porte un risque de
+comportement. Si une fenetre venait a manquer dans la grille :
 
 ```lua
-spoon.WindowSwitcher.completeWithAllWindows = false
+spoon.WindowSwitcher.completeWithAllWindows = true
 ```
 
 Le panneau est toujours calcule depuis le contenu puis limite par `maxPanelWidthRatio`, `maxPanelHeightRatio` et `screenMargin`, donc il ne doit jamais prendre tout l'ecran.

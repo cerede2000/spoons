@@ -9,6 +9,7 @@ io.write = function(s) out((s:gsub("\n$",""))) end
 obj.verboseLogging = false
 obj.showNotifications = false
 obj.screenCaptureHelperEnabled = false
+obj.defaultCompleteWithAllWindows = obj.completeWithAllWindows
 
 local function app(name, bundle, opts)
     opts = opts or {}
@@ -146,7 +147,8 @@ R.check("tête inchangée", collected[1].id, 10)
 R.check("la plus en avant d'abord", collected[2].id, 12)
 R.check("la plus en arrière ensuite", collected[3].id, 14)
 
-R.section("Sans seconde passe, seul le filtre compte")
+R.section("Par defaut, seul le filtre compte")
+R.check("seconde passe desactivee d'origine", obj.defaultCompleteWithAllWindows, false)
 obj.completeWithAllWindows = false
 ctl.filterWindows = { w10, w11 }
 ctl.allWindows = { w12, w13, w14 }
