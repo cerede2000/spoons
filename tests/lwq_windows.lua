@@ -267,4 +267,57 @@ R.check("rien n'est gravé", obj.spacesAvailable, nil)
 ctl.frontmostWindow = sonde
 R.check("disponible dès que la sonde répond", obj:spacesCrossCheckAvailable(), true)
 
+
+------------------------------------------------------------
+R.section("Le recoupement ne peut pas bloquer indéfiniment")
+-- Les identifiants relevés ne sont oubliés qu'une fois le comptage
+-- conclu à zéro — et ce comptage était justement empêché par eux.
+-- Une application dont la fenêtre venait d'être fermée ne se fermait
+-- alors plus jamais : IINA tournait en boucle.
+------------------------------------------------------------
+ctl.frontmostWindow = sonde
+ctl.windowSpaces = { [1] = { 1 } }
+obj.spacesAvailable = nil
+obj.undecidable = {}
+obj.undecidableSince = {}
+
+local bloquee = lib.app(ctl, { name = "IINA", bundle = "com.colliderli.iina",
+                               windows = { lib.window({ id = 1634 }) }, pid = 9000 })
+R.check("comptage normal", obj:countWindows(bloquee), 1)
+
+-- fenêtre fermée côté accessibilité, mais le WindowServer la voit encore
+bloquee._windows = {}
+bloquee.mainWindow = function() return nil end
+ctl.windowSpaces[1634] = { 7 }
+R.check("d'abord indécidable, c'est le but", obj:countWindows(bloquee), nil)
+R.check("l'instant est mémorisé", obj.undecidableSince[9000] ~= nil, true)
+
+ctl.now = ctl.now + 5
+R.check("toujours indécidable dans le délai", obj:countWindows(bloquee), nil)
+
+ctl.now = ctl.now + obj.spacesGraceSeconds + 1
+ctl.printed = {}
+R.check("passé le délai, l'accessibilité tranche", obj:countWindows(bloquee), 0)
+R.check("l'abandon est journalisé",
+    table.concat(ctl.printed, " "):find("Recoupement abandonne", 1, true) ~= nil, true)
+R.check("les identifiants périmés sont oubliés", obj.knownWindowIDs[9000], nil)
+
+R.section("Un comptage réussi remet les compteurs à zéro")
+bloquee._windows = { lib.window({ id = 1700 }) }
+R.check("comptage normal", obj:countWindows(bloquee), 1)
+R.check("plus d'instant d'indécision", obj.undecidableSince[9000], nil)
+R.check("plus de motif retenu", obj.undecidable[9000], nil)
+
+R.section("Le journal ne se répète pas")
+bloquee._windows = {}
+bloquee.mainWindow = function() return nil end
+ctl.windowSpaces[1700] = { 7 }
+ctl.printed = {}
+for _ = 1, 5 do obj:countWindows(bloquee) end
+local repetitions = 0
+for _, l in ipairs(ctl.printed) do
+    if l:find("Comptage indecidable", 1, true) then repetitions = repetitions + 1 end
+end
+R.check("une seule ligne pour cinq comptages", repetitions, 1)
+
 R.finish()

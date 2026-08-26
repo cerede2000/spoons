@@ -188,6 +188,26 @@ plan ; seul un succes est memorise, un echec pouvant n'etre que
 passager. Si elle disparait d'une version de macOS, seule la deuxieme
 barriere tombe.
 
+### Le recoupement ne peut pas bloquer indefiniment
+
+Les identifiants releves ne sont oublies qu'une fois le comptage conclu
+a zero — et ce comptage etait justement empeche par eux. Une application
+dont la fenetre venait d'etre fermee ne se fermait alors plus jamais.
+
+Le recoupement protege d'un aveuglement passager, pas d'une erreur
+durable. Passe `spacesGraceSeconds`, il est abandonne pour cette
+application et l'accessibilite redevient seule juge :
+
+```
+Recoupement abandonne pour IINA apres 30 s :
+l'accessibilite redevient seule juge
+```
+
+Le passage a l'etat indecidable n'est journalise qu'une fois, pas a
+chaque scan : une application posee sur un autre bureau ecrivait sinon
+une ligne toutes les cinq secondes, indefiniment.
+
 ```lua
 spoon.LastWindowQuits.useSpacesCrossCheck = false
+spoon.LastWindowQuits.spacesGraceSeconds = 30
 ```
