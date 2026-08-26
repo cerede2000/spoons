@@ -70,7 +70,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.18.1"
+obj.version = "0.18.2"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -7132,10 +7132,26 @@ function obj:resolveCrossSpace(selected)
     end
 
 
-    local resultat =
-        safeCall(function()
+    local depart =
+        table.concat(
+            safeCall(function()
 
-            local ok,
+                return spaces.windowSpaces(selected.id)
+
+            end) or {},
+            ","
+        )
+
+
+    -- safeCall jetterait le message : les refus de libspaces.m sont
+    -- leves comme des erreurs Lua, pas renvoyes. Sans ce message il
+    -- n'y a rien a diagnostiquer.
+
+    local appelOK,
+          retour =
+        pcall(function()
+
+            local deplacee,
                   err =
                 spaces.moveWindowToSpace(
                     selected.id,
@@ -7143,9 +7159,35 @@ function obj:resolveCrossSpace(selected)
                 )
 
 
-            return { ok = ok, err = err }
+            return { deplacee = deplacee, err = err }
 
         end)
+
+
+    local motif
+
+
+    if not appelOK then
+
+        motif =
+            "erreur : " .. tostring(retour)
+
+    elseif retour and retour.err then
+
+        motif =
+            tostring(retour.err)
+
+    elseif retour and retour.deplacee then
+
+        motif =
+            "l'API a dit oui, la fenetre n'a pas bouge"
+
+    else
+
+        motif =
+            "l'API n'a rien signale"
+
+    end
 
 
     -- Le retour de l'API ne suffit pas a conclure : on relit la
@@ -7189,8 +7231,10 @@ function obj:resolveCrossSpace(selected)
         self:log(
             "Deplacement refuse pour "
             .. tostring(selected.displayTitle)
-            .. " : "
-            .. tostring(resultat and resultat.err or "raison inconnue")
+            .. " [fenetre " .. tostring(selected.id)
+            .. ", bureau " .. tostring(depart)
+            .. " vers " .. tostring(destination)
+            .. "] : " .. motif
             .. ". macOS bascule de bureau a la place."
         )
 

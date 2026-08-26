@@ -342,6 +342,27 @@ obj:commit()
 hs.spaces.moveWindowToSpace = vraiMove2
 R.check("le mensonge est détecté",
     table.concat(ctl.printed, " "):find("Deplacement refuse", 1, true) ~= nil, true)
+R.check("et le journal dit d'où vers où",
+    table.concat(ctl.printed, " "):find("bureau 2 vers 1", 1, true) ~= nil, true)
+
+R.section("Un refus levé comme erreur Lua garde son message")
+-- libspaces.m lève ses refus (« target space ID %d does not refer to a
+-- user space »…) au lieu de les renvoyer. safeCall les avalait, et le
+-- journal disait « raison inconnue » : rien à diagnostiquer.
+nouvelleSession()
+obj.crossSpaceActivation = "bring"
+local vraiMove3 = hs.spaces.moveWindowToSpace
+hs.spaces.moveWindowToSpace = function()
+    error("source space for windowID 2 is not a user space")
+end
+ctl.printed = {}
+obj:step(1)
+obj:commit()
+hs.spaces.moveWindowToSpace = vraiMove3
+R.check("le message de libspaces est journalisé",
+    table.concat(ctl.printed, " "):find("is not a user space", 1, true) ~= nil, true)
+R.check("plus de « raison inconnue »",
+    table.concat(ctl.printed, " "):find("raison inconnue", 1, true) ~= nil, false)
 local attente = false
 for _, t in ipairs(ctl.timers) do
     if t.delay == obj.crossSpaceFocusDelay then attente = true end
