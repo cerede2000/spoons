@@ -64,9 +64,14 @@ R.check("appui ignoré", obj.selectedIndex, avant)
 ------------------------------------------------------------
 R.section("Les modificateurs : un eventtap, plus un sondage à 100 Hz")
 ------------------------------------------------------------
-R.check("un eventtap est en place", #ctl.eventtaps, 1)
-R.check("il écoute flagsChanged", ctl.eventtaps[1].types[1], "flagsChanged")
-R.check("il tourne", ctl.eventtaps[1].running, true)
+local function tapPour(type)
+    for _, t in ipairs(ctl.eventtaps) do
+        if t.types and t.types[1] == type then return t end
+    end
+end
+local tapMods = tapPour("flagsChanged")
+R.check("un eventtap écoute flagsChanged", tapMods ~= nil, true)
+R.check("il tourne", tapMods.running, true)
 R.check("un seul timer de secours", #ctl.everyTimers, 1)
 R.check("timer de secours espacé, pas 0,01 s",
     ctl.everyTimers[1].delay, obj.modifierSafetyInterval)
@@ -75,7 +80,7 @@ R.section("Relâcher la touche valide immédiatement")
 ctl.modifierRaw = 0
 ctl.eventtaps[1].fn()
 R.check("session fermée", obj.entries, nil)
-R.check("eventtap arrêté", ctl.eventtaps[1].running, false)
+R.check("eventtap arrêté", tapMods.running, false)
 R.check("timer de secours arrêté", ctl.everyTimers[1].stopped, true)
 
 R.section("Sans eventtap, le filet devient réactif")
@@ -246,6 +251,91 @@ R.check("cache de vignettes vidé", next(obj.snapshotCache), nil)
 R.check("cache d'icônes vidé", next(obj.iconCache), nil)
 R.check("session close", obj.entries, nil)
 R.check("eventtap relâché", obj.modifierTap, nil)
+
+------------------------------------------------------------
+R.section("Échap ferme sans rien activer")
+------------------------------------------------------------
+nouvelleSession()
+local active = {}
+for _, w in ipairs({ w1, w2, w3 }) do
+    w.focus = function() table.insert(active, "focus") end
+    w.unminimize = function() table.insert(active, "unminimize") end
+end
+obj:step(1)
+R.check("session ouverte", obj.entries ~= nil, true)
+local tapEchap
+for _, t in ipairs(ctl.eventtaps) do
+    if t.types and t.types[1] == "keyDown" then tapEchap = t end
+end
+R.check("un eventtap écoute les touches", tapEchap ~= nil, true)
+R.check("il tourne pendant la session", tapEchap.running, true)
+
+local consomme = tapEchap.fn({ getKeyCode = function() return 53 end })
+R.check("la touche est consommée", consomme, true)
+R.check("session fermée", obj.entries, nil)
+R.check("aucune fenêtre activée", #active, 0)
+R.check("panneau masqué", obj.switcherCanvas.shown, false)
+R.check("aperçu masqué", obj.previewVisible, false)
+R.check("eventtap arrêté", tapEchap.running, false)
+
+R.section("Une autre touche ne ferme rien et passe à l'application")
+nouvelleSession()
+obj:step(1)
+local autre = tapEchap.fn({ getKeyCode = function() return 8 end })
+R.check("la touche passe", autre, false)
+R.check("session toujours ouverte", obj.entries ~= nil, true)
+obj:commit()
+
+R.section("Annuler deux fois ne fait rien de plus")
+R.check("annulation à vide sans erreur", pcall(function() obj:cancel() end), true)
+
+R.section("Échap désactivable")
+nouvelleSession()
+obj.enableCancelKey = false
+obj:releaseSessionKeyTap()
+ctl.eventtaps = {}
+obj:step(1)
+local presence = false
+for _, t in ipairs(ctl.eventtaps) do
+    if t.types and t.types[1] == "keyDown" and t.running then presence = true end
+end
+R.check("aucun eventtap clavier actif", presence, false)
+obj.enableCancelKey = true
+obj:commit()
+
+------------------------------------------------------------
+R.section("Pastilles d'état")
+------------------------------------------------------------
+R.check("fenêtre ordinaire : aucune pastille",
+    #obj:stateBadges({ id = 1 }), 0)
+R.check("réduite : une pastille",
+    #obj:stateBadges({ id = 2, minimized = true }), 1)
+R.check("le glyphe est celui configuré",
+    obj:stateBadges({ id = 2, minimized = true })[1], obj.badgeMinimized)
+R.check("masquée : une pastille",
+    obj:stateBadges({ id = 3, hidden = true })[1], obj.badgeHidden)
+R.check("réduite et masquée : deux pastilles",
+    #obj:stateBadges({ id = 4, minimized = true, hidden = true }), 2)
+
+obj.showStateBadges = false
+R.check("désactivées : aucune pastille",
+    #obj:stateBadges({ id = 5, minimized = true }), 0)
+obj.showStateBadges = true
+
+R.section("Les pastilles sont dessinées dans la tuile")
+local els = {}
+obj:badgeElements(els, { id = 6, minimized = true, hidden = true },
+    { x = 100, y = 50, w = 200, h = 150 })
+R.check("deux pastilles, fond et glyphe pour chacune", #els, 4)
+R.check("la première est dans le coin de la vignette", els[1].frame.x, 106)
+R.check("la seconde est décalée",
+    els[3].frame.x, 106 + obj.badgeSize + obj.badgeGap)
+R.check("elles restent dans la vignette",
+    els[3].frame.x + obj.badgeSize < 100 + 200, true)
+
+local vides = {}
+obj:badgeElements(vides, { id = 7 }, { x = 0, y = 0, w = 100, h = 100 })
+R.check("aucun élément pour une fenêtre ordinaire", #vides, 0)
 
 R.section("Les canvas sont alloués au démarrage, pas au premier switch")
 obj.isStarted = false

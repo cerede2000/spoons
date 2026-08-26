@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.11.0"
+obj.version = "0.12.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -117,6 +117,25 @@ obj.iconSize = 22
 obj.placeholderIconScale = 3.1
 
 obj.textSize = 15
+
+-- Pastilles d'etat dessinees dans le coin de la vignette. Rien ne
+-- distinguait jusqu'ici une fenetre reduite d'une fenetre visible.
+obj.showStateBadges = true
+
+obj.badgeSize = 19
+
+obj.badgeTextSize = 12
+
+obj.badgeGap = 4
+
+obj.badgeMinimized = "⤓"
+
+obj.badgeHidden = "⦸"
+
+-- Echap ferme le switcher sans rien activer. Un eventtap plutot qu'un
+-- hs.hotkey : pendant un Option+Tab les modificateurs sont enfonces, et
+-- un raccourci sans modificateur ne se declencherait jamais.
+obj.enableCancelKey = true
 
 obj.panelCornerRadius = 24
 
@@ -273,6 +292,18 @@ obj.previewBorderWidth = 3
 obj.theme = "auto"
 
 obj.lightTheme = {
+    badgeBackgroundColor = {
+        red = 0.12,
+        green = 0.13,
+        blue = 0.15,
+        alpha = 0.70,
+    },
+    badgeTextColor = {
+        red = 1,
+        green = 1,
+        blue = 1,
+        alpha = 0.97,
+    },
     backgroundColor = {
         red = 0.91,
         green = 0.94,
@@ -322,6 +353,18 @@ obj.lightTheme = {
 }
 
 obj.darkTheme = {
+    badgeBackgroundColor = {
+        red = 0,
+        green = 0,
+        blue = 0,
+        alpha = 0.62,
+    },
+    badgeTextColor = {
+        red = 0.96,
+        green = 0.97,
+        blue = 0.99,
+        alpha = 0.97,
+    },
     backgroundColor = {
         red = 0.09,
         green = 0.105,
@@ -368,6 +411,20 @@ obj.darkTheme = {
         blue = 1,
         alpha = 1,
     },
+}
+
+obj.badgeBackgroundColor = {
+    red = 0.12,
+    green = 0.13,
+    blue = 0.15,
+    alpha = 0.70,
+}
+
+obj.badgeTextColor = {
+    red = 1,
+    green = 1,
+    blue = 1,
+    alpha = 0.97,
 }
 
 obj.backgroundColor = {
@@ -497,6 +554,8 @@ obj.previewIndex = nil
 obj.previewVisible = false
 
 obj.cachedUserID = nil
+
+obj.sessionKeyTap = nil
 
 obj.selectionFromMouse = false
 
@@ -3808,6 +3867,118 @@ function obj:panelElement(layout)
 end
 
 
+-- Les etats sont deja dans le descripteur : la pastille ne coute qu'un
+-- element de dessin, aucune interrogation supplementaire.
+
+function obj:stateBadges(descriptor)
+
+    local badges =
+        {}
+
+
+    if not self.showStateBadges or not descriptor then
+
+        return badges
+
+    end
+
+
+    if descriptor.minimized then
+
+        badges[#badges + 1] =
+            self.badgeMinimized
+
+    end
+
+
+    if descriptor.hidden then
+
+        badges[#badges + 1] =
+            self.badgeHidden
+
+    end
+
+
+    return badges
+
+end
+
+
+function obj:badgeElements(elements, descriptor, thumbFrame)
+
+    local badges =
+        self:stateBadges(descriptor)
+
+
+    local x =
+        thumbFrame.x + 6
+
+
+    local y =
+        thumbFrame.y + 6
+
+
+    for _, glyph in ipairs(badges) do
+
+        table.insert(
+            elements,
+            {
+                type = "rectangle",
+                action = "fill",
+                frame = {
+                    x = x,
+                    y = y,
+                    w = self.badgeSize,
+                    h = self.badgeSize,
+                },
+                roundedRectRadii = rounded(math.floor(self.badgeSize / 2)),
+                fillColor = self:themeColor("badgeBackgroundColor"),
+            }
+        )
+
+
+        table.insert(
+            elements,
+            {
+                type = "text",
+                frame = {
+                    x = x,
+                    y = y + math.floor((self.badgeSize - self.badgeTextSize) / 2) - 2,
+                    w = self.badgeSize,
+                    h = self.badgeSize,
+                },
+                text = safeCall(function()
+
+                    return styledtext.new(
+                        glyph,
+                        {
+                            font = {
+                                name = ".AppleSystemUIFont",
+                                size = self.badgeTextSize,
+                            },
+                            color = self:themeColor("badgeTextColor"),
+                            paragraphStyle = {
+                                alignment = "center",
+                            },
+                        }
+                    )
+
+                end) or glyph,
+            }
+        )
+
+
+        x =
+            x + self.badgeSize + self.badgeGap
+
+    end
+
+
+    return elements
+
+end
+
+
 function obj:tileElements(elements, item, offsetX, offsetY)
 
     offsetX =
@@ -3925,6 +4096,9 @@ function obj:tileElements(elements, item, offsetX, offsetY)
             strokeWidth = 1,
         }
     )
+
+
+    self:badgeElements(elements, entry, thumbFrame)
 
 
     if isSelected then
@@ -4582,6 +4756,139 @@ function obj:ensureModifierTap()
 end
 
 
+function obj:cancelKeyCode()
+
+    if self.cachedCancelKeyCode then
+
+        return self.cachedCancelKeyCode
+
+    end
+
+
+    local code =
+        safeCall(function()
+
+            return hs.keycodes.map.escape
+
+        end)
+
+
+    self.cachedCancelKeyCode =
+        code or 53
+
+
+    return self.cachedCancelKeyCode
+
+end
+
+
+function obj:ensureSessionKeyTap()
+
+    if self.sessionKeyTap then
+
+        return self.sessionKeyTap
+
+    end
+
+
+    self.sessionKeyTap =
+        eventtap.new(
+            { eventtap.event.types.keyDown },
+            function(event)
+
+                local code =
+                    safeCall(function()
+
+                        return event:getKeyCode()
+
+                    end)
+
+
+                if code == self:cancelKeyCode() then
+
+                    self:cancel()
+
+
+                    -- Consomme : l'application dessous ne doit pas
+                    -- recevoir l'Echap qui a ferme le switcher.
+
+                    return true
+
+                end
+
+
+                return false
+
+            end
+        )
+
+
+    return self.sessionKeyTap
+
+end
+
+
+function obj:startSessionKeyTap()
+
+    if not self.enableCancelKey then
+
+        return self
+
+    end
+
+
+    local tap =
+        self:ensureSessionKeyTap()
+
+
+    if tap then
+
+        safeCall(function()
+
+            tap:start()
+
+        end)
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:stopSessionKeyTap()
+
+    if self.sessionKeyTap then
+
+        safeCall(function()
+
+            self.sessionKeyTap:stop()
+
+        end)
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:releaseSessionKeyTap()
+
+    self:stopSessionKeyTap()
+
+
+    self.sessionKeyTap =
+        nil
+
+
+    return self
+
+end
+
+
 function obj:startModifierWatcher()
 
     self:stopModifierWatcher()
@@ -4861,6 +5168,7 @@ function obj:beginSession(direction)
 
     self:armMouseSelection()
     self:startModifierWatcher()
+    self:startSessionKeyTap()
 
 
     return true
@@ -4923,13 +5231,17 @@ function obj:previous()
 end
 
 
-function obj:commit()
+-- Ferme la session et rend tout ce qu'elle tenait. Ne decide rien :
+-- commit active la fenetre choisie, cancel ne fait que fermer.
+
+function obj:endSession()
 
     local selected =
         self.entries and self.entries[self.selectedIndex]
 
 
     self:stopModifierWatcher()
+    self:stopSessionKeyTap()
     self:cancelPendingRedraw()
     self:hidePreview()
     self:hideCanvas()
@@ -4957,6 +5269,36 @@ function obj:commit()
 
     self.previewIndex =
         nil
+
+
+    return selected
+
+end
+
+
+-- Echap : on ferme sans rien activer. Le focus reste ou il etait.
+
+function obj:cancel()
+
+    if not self.entries then
+
+        return self
+
+    end
+
+
+    self:endSession()
+
+
+    return self
+
+end
+
+
+function obj:commit()
+
+    local selected =
+        self:endSession()
 
 
     if not selected then
@@ -5857,6 +6199,7 @@ function obj:stop()
 
     self:deleteHotkeys()
     self:releaseModifierTap()
+    self:releaseSessionKeyTap()
     self:cancelPendingRedraw()
     self:stopScreenCaptureTasks()
     self:stopScreenCaptureHelperApp()

@@ -34,6 +34,7 @@ spoon.WindowSwitcher:start()
 - `Option + Tab` : fenetre suivante.
 - `Option + Maj + Tab` : fenetre precedente.
 - Relacher les modificateurs : selectionne et active la fenetre.
+- `Echap` : ferme le switcher sans rien activer, le focus reste ou il etait.
 
 ## Fonctionnalites
 
@@ -51,6 +52,8 @@ spoon.WindowSwitcher:start()
 - Affichage immediat : les captures ScreenCaptureKit sont chargees en arriere-plan.
 - Selection souris : survol pour selectionner, clic pour activer directement la fenetre.
 - Apercu de la fenetre selectionnee, a sa taille et a sa place reelles, sous le panneau.
+- Pastilles d'etat sur la vignette : fenetre reduite, application masquee.
+- `Echap` annule la session sans rien activer.
 - Restauration des fenetres minimisees avant focus.
 - Inclusion des fenetres minimisees et cachees par defaut.
 - Inclusion des autres Spaces par defaut, dans les limites des API macOS exposees a Hammerspoon.
@@ -85,10 +88,34 @@ spoon.WindowSwitcher.redrawCoalesceSeconds = 0.05
 spoon.WindowSwitcher.mouseActivationDistance = 6
 spoon.WindowSwitcher.focusReassertDelay = 0.12
 spoon.WindowSwitcher.snapshotBudgetSeconds = 0.045
+spoon.WindowSwitcher.showStateBadges = true
+spoon.WindowSwitcher.badgeMinimized = "⤓"
+spoon.WindowSwitcher.badgeHidden = "⦸"
+spoon.WindowSwitcher.enableCancelKey = true
 spoon.WindowSwitcher.enableWindowPreview = true
 spoon.WindowSwitcher.previewDelay = 0.65
 spoon.WindowSwitcher.previewOnKeyboard = true
 ```
+
+### Pastilles d'etat
+
+Une pastille dans le coin de la vignette signale une fenetre reduite
+(`⤓`) ou une application masquee par Cmd+H (`⦸`). L'information vient du
+descripteur deja construit pour filtrer la fenetre : la pastille ne
+coute qu'un element de dessin, aucune interrogation supplementaire.
+
+Les deux glyphes sont configurables, et `showStateBadges = false` les
+retire.
+
+### Annuler
+
+`Echap` ferme le switcher sans rien activer : le focus reste exactement
+ou il etait. La touche est consommee, l'application dessous ne la voit
+pas.
+
+C'est un eventtap et non un `hs.hotkey` : pendant un `Option+Tab` les
+modificateurs sont enfonces, et un raccourci declare sans modificateur
+ne se declencherait jamais. Le tap ne tourne que pendant une session.
 
 ### Apercu de la fenetre
 
