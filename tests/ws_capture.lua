@@ -42,6 +42,8 @@ local function reset()
     obj.queuedScreenCaptures = {}
     obj.runningScreenCaptures = {}
     obj.screenCaptureFailureCache = {}
+    obj.screenCaptureFailureCounts = {}
+    obj.screenCaptureReportedFailures = {}
     obj.snapshotCache = {}
     obj.captureFiles = {}
     obj.screenCaptureDisabledReason = nil
@@ -288,6 +290,48 @@ R.check("pas de nouvelle tentative immédiate", obj.runningScreenCaptures[40], n
 obj.screenCaptureFailureCache[40] = 1000 - obj.screenCaptureFailureBackoffSeconds - 1
 obj:queueScreenCapture(descriptor(40, { minimized = true }))
 R.check("nouvelle tentative après le délai", obj.runningScreenCaptures[40] ~= nil, true)
+
+R.section("Une fenêtre que macOS refuse de capturer est mise de côté")
+-- Le panneau Enregistrement de l'écran renvoie une erreur de diffusion
+-- à chaque tentative. Réessayer toutes les 5 s en journalisant à chaque
+-- fois remplissait la console pour rien.
+reset()
+obj.logScreenCaptureFailures = true
+local rate = { id = 70, kind = "capture", token = "t", outputPath = "/tmp/ws-test/x.png",
+               appName = "Réglages Système", title = "Enregistrement de l'écran",
+               isMinimized = true }
+ctl.printed = {}
+for _ = 1, obj.screenCaptureGiveUpAfter do
+    obj.runningScreenCaptures[70] = { job = rate, startedAt = ctl.now }
+    obj:finishScreenCaptureJob(rate, nil, "SCStreamErrorDomain Code=-3811")
+end
+R.check("les échecs sont comptés", obj.screenCaptureFailureCounts[70],
+    obj.screenCaptureGiveUpAfter)
+local journal = table.concat(ctl.printed, " | ")
+R.check("un seul message d'échec ordinaire",
+    select(2, journal:gsub("Capture impossible", "")), 1)
+R.check("puis un message d'abandon",
+    journal:find("Capture abandonnee", 1, true) ~= nil, true)
+R.check("qui dit ce qui sera affiché à la place",
+    journal:find("icone de l'application", 1, true) ~= nil, true)
+
+R.section("Elle n'est plus réessayée au délai ordinaire")
+ctl.now = ctl.now + obj.screenCaptureFailureBackoffSeconds + 1
+obj:queueScreenCapture(descriptor(70, { minimized = true }))
+R.check("aucune nouvelle tentative", obj.runningScreenCaptures[70], nil)
+
+R.section("Mais elle est réessayée après le long délai")
+ctl.now = ctl.now + obj.screenCaptureGiveUpBackoffSeconds
+obj:queueScreenCapture(descriptor(70, { minimized = true }))
+R.check("nouvelle tentative", obj.runningScreenCaptures[70] ~= nil, true)
+
+R.section("Une capture qui finit par réussir efface l'ardoise")
+obj:finishScreenCaptureJob({ id = 70, kind = "capture", token = "t",
+    outputPath = "/tmp/ws-test/x.png" }, { _image = 1 })
+R.check("compteur remis à zéro", obj.screenCaptureFailureCounts[70], nil)
+R.check("journal réarmé", obj.screenCaptureReportedFailures[70], nil)
+R.check("quarantaine levée", obj.screenCaptureFailureCache[70], nil)
+obj.logScreenCaptureFailures = false
 
 R.section("Un refus d'autorisation coupe proprement le service")
 reset()

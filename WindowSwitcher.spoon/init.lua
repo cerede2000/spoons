@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.16.0"
+obj.version = "0.17.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -175,8 +175,15 @@ obj.badges = {
 
 -- Quelle application joue du son, laquelle capte le micro. L'inventaire
 -- vient du service, par l'API publique CoreAudio des objets de
--- processus. Le demander maintient le service en vie une trentaine de
--- secondes apres chaque switch : le couper si c'est de trop.
+-- processus.
+--
+-- Il est demande au demarrage puis a chaque session, et le resultat est
+-- conserve d'une session a l'autre. Quand le service est froid il met
+-- environ une demi-seconde a repondre : un switch tres bref se termine
+-- avant, et les pastilles paraissent alors a la session suivante. C'est
+-- le prix de l'extinction du service entre deux switchs ; allonger
+-- helperIdleGraceSeconds les rend immediates au prix de 31 Mo
+-- residents.
 obj.showAudioBadges = true
 
 -- "task" lance le service comme enfant de Hammerspoon : macOS attribue
@@ -320,6 +327,18 @@ obj.screenCapturePixelHeight = 420
 
 obj.screenCaptureFailureBackoffSeconds = 5
 
+-- Certaines fenetres ne seront jamais capturables : macOS refuse par
+-- conception le panneau Enregistrement de l'ecran, et renvoie une
+-- erreur de diffusion a chaque tentative. Le delai de cinq secondes
+-- faisait reessayer a chaque switch, en journalisant a chaque fois.
+--
+-- Apres ce nombre d'echecs consecutifs, la fenetre est mise de cote
+-- pour une duree bien plus longue. Elle affiche l'icone de son
+-- application, ce qui est le bon repli.
+obj.screenCaptureGiveUpAfter = 3
+
+obj.screenCaptureGiveUpBackoffSeconds = 600
+
 -- Le helper s'accorde lui-meme 5 s par capture et sonde au repos
 -- toutes les 0,35 s : il peut donc legitimement repondre a 5,35 s.
 -- Abandonner a 5 s faisait echouer des captures qui allaient aboutir.
@@ -400,6 +419,12 @@ obj.snapshotCacheMaxAgeSeconds = 600
 -- Distance en pixels que la souris doit parcourir avant de reprendre la
 -- main sur la selection clavier.
 obj.mouseActivationDistance = 6
+
+-- Au bout de ce silence de la souris, les feux s'effacent. Ils
+-- reapparaissent des qu'elle bouge a nouveau. Sans cela ils restaient a
+-- l'ecran jusqu'a la fin de la session, alors qu'ils ne servent que
+-- lorsqu'on vise avec la souris.
+obj.mouseIdleSeconds = 1.6
 
 obj.screenCaptureHelperBundleID = "local.hammerspoon.WindowSwitcherCapture"
 
@@ -644,6 +669,10 @@ obj.snapshotCache = {}
 
 obj.screenCaptureFailureCache = {}
 
+obj.screenCaptureFailureCounts = {}
+
+obj.screenCaptureReportedFailures = {}
+
 obj.screenCaptureQueue = {}
 
 obj.queuedScreenCaptures = {}
@@ -689,6 +718,8 @@ obj.captureFiles = {}
 obj.mouseArmed = false
 
 obj.mouseOrigin = nil
+
+obj.mouseIdleTimer = nil
 
 obj.previewCanvas = nil
 
@@ -2032,6 +2063,14 @@ function obj:clearSnapshotCache()
         {}
 
 
+    self.screenCaptureFailureCounts =
+        {}
+
+
+    self.screenCaptureReportedFailures =
+        {}
+
+
     return self
 
 end
@@ -3280,6 +3319,14 @@ function obj:finishScreenCaptureJob(job, capturedImage, errorMessage)
             nil
 
 
+        self.screenCaptureFailureCounts[job.id] =
+            nil
+
+
+        self.screenCaptureReportedFailures[job.id] =
+            nil
+
+
         self:trimSnapshotCache()
 
 
@@ -3300,6 +3347,10 @@ function obj:finishScreenCaptureJob(job, capturedImage, errorMessage)
 
     self.screenCaptureFailureCache[job.id] =
         timer.secondsSinceEpoch()
+
+
+    self.screenCaptureFailureCounts[job.id] =
+        (self.screenCaptureFailureCounts[job.id] or 0) + 1
 
 
     local messageText =
@@ -3352,7 +3403,37 @@ function obj:finishScreenCaptureJob(job, capturedImage, errorMessage)
         )
 
 
-    if self.logScreenCaptureFailures or job.isMinimized or job.isHidden then
+    -- Une meme fenetre ne doit pas remplir la console a chaque switch :
+    -- on journalise le premier echec, puis on se tait jusqu'a ce qu'elle
+    -- soit mise de cote.
+
+    local echecs =
+        self.screenCaptureFailureCounts[job.id] or 1
+
+
+    local premierEchec =
+        not self.screenCaptureReportedFailures[job.id]
+
+
+    self.screenCaptureReportedFailures[job.id] =
+        true
+
+
+    if echecs >= self.screenCaptureGiveUpAfter then
+
+        self:log(
+            string.format(
+                "Capture abandonnee pour %s - %s apres %d echecs, "
+                .. "l'icone de l'application sera affichee : %s",
+                tostring(job.appName),
+                tostring(job.title or ""),
+                echecs,
+                messageText
+            )
+        )
+
+    elseif premierEchec
+        and (self.logScreenCaptureFailures or job.isMinimized or job.isHidden) then
 
         self:log(message)
 
@@ -3649,8 +3730,23 @@ function obj:queueScreenCapture(descriptor)
         self.screenCaptureFailureCache[id]
 
 
-    if failedAt
-        and failedAt + self.screenCaptureFailureBackoffSeconds > now then
+    local echecs =
+        self.screenCaptureFailureCounts[id] or 0
+
+
+    local attente =
+        self.screenCaptureFailureBackoffSeconds
+
+
+    if echecs >= self.screenCaptureGiveUpAfter then
+
+        attente =
+            self.screenCaptureGiveUpBackoffSeconds
+
+    end
+
+
+    if failedAt and failedAt + attente > now then
 
         return self
 
@@ -4831,6 +4927,8 @@ function obj:trafficLightElements(elements, kind, frame, identifier)
             fillColor = self:themeColor("hitTargetColor"),
             trackMouseDown = true,
             trackMouseUp = true,
+            trackMouseEnterExit = true,
+            trackMouseMove = true,
         }
     )
 
@@ -4919,6 +5017,83 @@ function obj:armMouseSelection()
             return hs.mouse.absolutePosition()
 
         end)
+
+
+    return self
+
+end
+
+
+function obj:cancelMouseIdleTimer()
+
+    if self.mouseIdleTimer then
+
+        self.mouseIdleTimer:stop()
+
+
+        self.mouseIdleTimer =
+            nil
+
+    end
+
+
+    return self
+
+end
+
+
+-- Repousse l'effacement des feux. Appele a chaque signe de vie de la
+-- souris, y compris quand elle survole les feux eux-memes : sinon ils
+-- disparaitraient sous le pointeur au moment de cliquer.
+
+function obj:noteMouseActivity()
+
+    self:cancelMouseIdleTimer()
+
+
+    if not self.mouseIdleSeconds
+        or self.mouseIdleSeconds <= 0 then
+
+        return self
+
+    end
+
+
+    self.mouseIdleTimer =
+        timer.doAfter(
+            self.mouseIdleSeconds,
+            function()
+
+                self.mouseIdleTimer =
+                    nil
+
+
+                if not self.entries or not self.mouseArmed then
+
+                    return
+
+                end
+
+
+                self.mouseArmed =
+                    false
+
+
+                -- On repart de la position courante : il faudra un
+                -- nouveau deplacement franc pour les faire revenir.
+
+                self.mouseOrigin =
+                    safeCall(function()
+
+                        return hs.mouse.absolutePosition()
+
+                    end)
+
+
+                self:redraw()
+
+            end
+        )
 
 
     return self
@@ -5162,6 +5337,9 @@ function obj:handleMouseEvent(message, elementID)
 
     if closeIndex then
 
+        self:noteMouseActivity()
+
+
         if message == "mouseUp" then
 
             self:closeEntry(tonumber(closeIndex))
@@ -5179,6 +5357,9 @@ function obj:handleMouseEvent(message, elementID)
 
 
     if minimizeIndex then
+
+        self:noteMouseActivity()
+
 
         if message == "mouseUp" then
 
@@ -5216,6 +5397,10 @@ function obj:handleMouseEvent(message, elementID)
 
     -- Un clic est toujours une intention explicite ; un survol, non.
 
+    local etaitArmee =
+        self.mouseArmed
+
+
     if message ~= "mouseUp" and not self:mouseHasMoved() then
 
         return
@@ -5224,6 +5409,9 @@ function obj:handleMouseEvent(message, elementID)
 
 
     if message == "mouseEnter" or message == "mouseMove" then
+
+        self:noteMouseActivity()
+
 
         if self.selectedIndex ~= index then
 
@@ -5234,6 +5422,15 @@ function obj:handleMouseEvent(message, elementID)
             self.selectedIndex =
                 index
 
+
+            self:redraw()
+
+        elseif not etaitArmee then
+
+            -- La souris vient de reprendre la main sur la tuile deja
+            -- visee. Rien ne change dans la selection, donc rien ne
+            -- serait redessine, et les feux n'apparaitraient jamais
+            -- sur celle-la.
 
             self:redraw()
 
@@ -6241,6 +6438,7 @@ function obj:endSession()
 
     self:stopModifierWatcher()
     self:stopSessionKeyTap()
+    self:cancelMouseIdleTimer()
     self:cancelPendingRedraw()
     self:hidePreview()
     self:hideCanvas()
@@ -7099,6 +7297,63 @@ end
 
 
 
+-- A lancer depuis la console Hammerspoon :
+--     spoon.WindowSwitcher:audioStatus()
+--
+-- Dit ou en est l'inventaire du son, sans rien changer. Utile pour
+-- savoir si une pastille absente vient du service, du releve ou de
+-- l'application elle-meme.
+
+function obj:audioStatus()
+
+    local joue =
+        {}
+
+
+    local capte =
+        {}
+
+
+    for pid in pairs(self.audioPIDs) do
+
+        joue[#joue + 1] =
+            tostring(pid)
+
+    end
+
+
+    for pid in pairs(self.microphonePIDs) do
+
+        capte[#capte + 1] =
+            tostring(pid)
+
+    end
+
+
+    table.sort(joue)
+    table.sort(capte)
+
+
+    self:log(
+        string.format(
+            "audio : pastilles %s | service %s | demande en vol %s | "
+            .. "jouent [%s] | captent [%s]",
+            self.showAudioBadges and "actives" or "desactivees",
+            self:screenCaptureHelperIsRunning() and "en marche" or "arrete",
+            (self.runningScreenCaptures["audio"] or self.queuedScreenCaptures["audio"])
+                and "oui" or "non",
+            table.concat(joue, ","),
+            table.concat(capte, ",")
+        )
+    )
+
+
+    return self
+
+end
+
+
+
 ------------------------------------------------------------
 -- START / STOP
 ------------------------------------------------------------
@@ -7162,6 +7417,12 @@ function obj:start()
     self:ensureWindowFilter()
 
 
+    -- Demande des maintenant, pour que le premier switch ait deja ses
+    -- pastilles au lieu de les decouvrir une demi-seconde trop tard.
+
+    self:queueAudioSnapshot()
+
+
     -- Allouees des maintenant, affichees seulement au premier switch.
 
     self:createCanvas()
@@ -7199,6 +7460,7 @@ function obj:stop()
     self:deleteHotkeys()
     self:releaseModifierTap()
     self:releaseSessionKeyTap()
+    self:cancelMouseIdleTimer()
     self:cancelPendingRedraw()
     self:stopScreenCaptureTasks()
     self:stopScreenCaptureHelperApp()

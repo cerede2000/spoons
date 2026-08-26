@@ -87,6 +87,8 @@ spoon.WindowSwitcher.completeWithAllWindows = true
 spoon.WindowSwitcher.modifierSafetyInterval = 0.35
 spoon.WindowSwitcher.redrawCoalesceSeconds = 0.05
 spoon.WindowSwitcher.mouseActivationDistance = 6
+spoon.WindowSwitcher.mouseIdleSeconds = 1.6
+spoon.WindowSwitcher.screenCaptureGiveUpAfter = 3
 spoon.WindowSwitcher.focusReassertDelay = 0.12
 spoon.WindowSwitcher.snapshotBudgetSeconds = 0.045
 spoon.WindowSwitcher.showStateBadges = true
@@ -119,6 +121,36 @@ objets de processus (`kAudioProcessPropertyIsRunningOutput` et
 touche ni le disque ni ScreenCaptureKit.
 
 `showAudioBadges = false` supprime la demande **et** les pastilles.
+
+L'inventaire est demande au demarrage puis a chaque session, et son
+resultat est conserve d'une session a l'autre. Quand le service est
+froid il met environ une demi-seconde a repondre : un switch tres bref
+se termine avant, et les pastilles paraissent alors a la session
+suivante. C'est le prix de l'extinction du service entre deux switchs ;
+allonger `helperIdleGraceSeconds` les rend immediates, au prix de 31 Mo
+residents.
+
+```lua
+spoon.WindowSwitcher:audioStatus()
+```
+
+Dit ou en est l'inventaire sans rien changer : pastilles actives ou non,
+service en marche ou arrete, demande en vol, et la liste des processus
+qui jouent et qui captent.
+
+### Fenetres que macOS refuse de capturer
+
+Certaines fenetres ne seront jamais capturables. Le panneau
+**Enregistrement de l'ecran** des Reglages Systeme, par exemple, renvoie
+`SCStreamErrorDomain Code=-3811` a chaque tentative.
+
+Le delai d'attente ordinaire de cinq secondes faisait reessayer a chaque
+switch, en journalisant a chaque fois. Apres
+`screenCaptureGiveUpAfter` echecs consecutifs, la fenetre est mise de
+cote pour `screenCaptureGiveUpBackoffSeconds`, et l'abandon est
+journalise une seule fois. Elle affiche alors l'icone de son
+application, ce qui est le bon repli. Une capture qui finit par reussir
+efface l'ardoise.
 
 **La camera n'a pas d'equivalent.** CMIO expose les peripheriques, pas
 l'application qui les utilise : macOS reserve cette attribution au
@@ -176,6 +208,16 @@ visible.
 
 Leurs cibles de clic sont posees apres celle de la tuile, donc elles
 recoivent le clic en premier — sans quoi elles activeraient la fenetre.
+
+Ils apparaissent des que la souris bouge franchement, **y compris quand
+elle survole la tuile deja visee** : dans ce cas la selection ne change
+pas, donc rien ne serait redessine sans un rendu explicite.
+
+Ils s'effacent apres `mouseIdleSeconds` de silence de la souris, et
+reviennent au mouvement suivant. Survoler un feu repousse cet
+effacement, sans quoi il disparaitrait sous le pointeur au moment de
+cliquer. Mettre ce delai a `0` les laisse affiches jusqu'a la fin de la
+session.
 
 Au clavier, `W` ferme la fenetre visee et `M` la reduit. Fermer retire
 la tuile et termine la session s'il n'en reste aucune ; reduire la garde

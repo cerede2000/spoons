@@ -30,6 +30,7 @@ local function nouvelleSession()
     obj.sessionKeyTap = nil
     obj.modifierTimer = nil
     obj.redrawTimer = nil
+    obj.mouseIdleTimer = nil
     ctl.eventtaps = {}
     ctl.everyTimers = {}
     ctl.filterWindows = { w1, w2, w3 }
@@ -703,6 +704,60 @@ R.check("un rapport est journalisé", rapport:find("benchmark", 1, true) ~= nil,
 R.check("les phases sont détaillées", rapport:find("collecte", 1, true) ~= nil, true)
 R.check("session intacte", obj.entries, avant)
 R.check("sélection intacte", obj.selectedIndex, selAvant)
+obj:commit()
+
+R.section("Les feux apparaissent aussi sur la tuile déjà visée")
+nouvelleSession()
+obj:step(1)
+local vise = obj.selectedIndex
+R.check("souris pas encore armée", obj.mouseArmed, false)
+local rendus = 0
+local vraiRedraw2 = obj.redraw
+obj.redraw = function(self) rendus = rendus + 1 return vraiRedraw2(self) end
+ctl.mousePosition = { x = 480, y = 360 }        -- déplacement franc
+obj:handleMouseEvent("mouseMove", "tile:" .. tostring(vise))
+R.check("la souris a repris la main", obj.mouseArmed, true)
+R.check("la sélection n'a pas bougé", obj.selectedIndex, vise)
+R.check("un rendu a quand même eu lieu", rendus, 1)
+obj.redraw = vraiRedraw2
+
+R.section("Elle ne redessine pas à chaque frémissement ensuite")
+rendus = 0
+obj.redraw = function(self) rendus = rendus + 1 return vraiRedraw2(self) end
+obj:handleMouseEvent("mouseMove", "tile:" .. tostring(vise))
+obj:handleMouseEvent("mouseMove", "tile:" .. tostring(vise))
+R.check("aucun rendu inutile", rendus, 0)
+obj.redraw = vraiRedraw2
+
+R.section("Les feux s'effacent quand la souris se tait")
+R.check("une minuterie d'inactivité est armée", obj.mouseIdleTimer ~= nil, true)
+R.check("au délai configuré",
+    ctl.timers[#ctl.timers].delay, obj.mouseIdleSeconds)
+ctl.fireOnly(obj.mouseIdleSeconds)
+R.check("la souris est désarmée", obj.mouseArmed, false)
+R.check("la session continue", obj.entries ~= nil, true)
+
+R.section("Un nouveau mouvement les fait revenir")
+ctl.mousePosition = { x = 600, y = 420 }
+obj:handleMouseEvent("mouseMove", "tile:" .. tostring(vise))
+R.check("réarmée", obj.mouseArmed, true)
+
+R.section("Survoler un feu repousse son effacement")
+obj:handleMouseEvent("mouseEnter", "close:" .. tostring(vise))
+R.check("la minuterie est relancée", obj.mouseIdleTimer ~= nil, true)
+R.check("les feux restent affichés", obj.mouseArmed, true)
+obj:commit()
+R.check("la minuterie est annulée en fin de session", obj.mouseIdleTimer, nil)
+
+R.section("Effacement désactivable")
+nouvelleSession()
+obj.mouseIdleSeconds = 0
+obj:step(1)
+ctl.mousePosition = { x = 500, y = 380 }
+obj:handleMouseEvent("mouseMove", "tile:1")
+R.check("aucune minuterie", obj.mouseIdleTimer, nil)
+R.check("les feux restent", obj.mouseArmed, true)
+obj.mouseIdleSeconds = 1.6
 obj:commit()
 
 R.section("Après stop, un start repart proprement")

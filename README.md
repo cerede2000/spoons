@@ -32,7 +32,7 @@ Chaque Spoon expose sa configuration en tête de fichier, sous
 
 ## Tests
 
-584 cas, exécutables sans Hammerspoon — voir [tests/](tests/).
+608 cas, exécutables sans Hammerspoon — voir [tests/](tests/).
 
 ```bash
 sh tests/run-all.sh
