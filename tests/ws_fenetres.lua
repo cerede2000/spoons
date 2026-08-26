@@ -147,9 +147,31 @@ R.check("tête inchangée", collected[1].id, 10)
 R.check("la plus en avant d'abord", collected[2].id, 12)
 R.check("la plus en arrière ensuite", collected[3].id, 14)
 
-R.section("Par defaut, seul le filtre compte")
-R.check("seconde passe desactivee d'origine", obj.defaultCompleteWithAllWindows, false)
+------------------------------------------------------------
+R.section("Régression : le filtre ignore les fenêtres réduites au démarrage")
+-- Dans window_filter.lua, une application n'est inscrite que si
+-- app:focusedWindow() répond ; sinon elle part dans une échelle de
+-- réessais dont seul le dernier force l'inscription, 4,2 s plus tard.
+-- Une application dont toutes les fenêtres sont réduites n'a pas de
+-- fenêtre focalisée : elle est absente du filtre pendant ce délai.
+-- La seconde passe est ce qui la rattrape.
+------------------------------------------------------------
+R.check("seconde passe active d'origine", obj.defaultCompleteWithAllWindows, true)
+
+local reduite = win(15, mail, { title = "Réduite", minimized = true })
+obj.completeWithAllWindows = true
+ctl.filterWindows = { w10 }                  -- le filtre ne la connaît pas encore
+ctl.allWindows    = { w10, reduite }
+ctl.orderedIDs    = { 10 }                   -- une réduite n'est pas dans l'ordre z
+collected = obj:collectWindows()
+R.check("elle est là dès le premier switch", #collected, 2)
+R.check("le filtre garde la tête", collected[1].id, 10)
+R.check("la réduite est rattrapée", collected[2].id, 15)
+
+R.section("Sans seconde passe, elle manquerait")
 obj.completeWithAllWindows = false
+collected = obj:collectWindows()
+R.check("une seule fenêtre, la réduite a disparu", #collected, 1)
 ctl.filterWindows = { w10, w11 }
 ctl.allWindows = { w12, w13, w14 }
 collected = obj:collectWindows()

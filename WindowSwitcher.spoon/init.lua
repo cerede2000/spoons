@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.10.2"
+obj.version = "0.10.3"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -174,16 +174,26 @@ obj.logScreenCaptureFailures = true
 obj.stepThrottleSeconds = 0.06
 
 -- Seconde passe d'inventaire via hs.window.allWindows() : un balayage
--- d'accessibilite de toutes les applications lancees, de loin
--- l'operation la plus couteuse d'une session.
+-- d'accessibilite de toutes les applications lancees. C'est l'operation
+-- la plus couteuse d'une session, et elle n'est pas facultative.
 --
--- Elle existait parce que le filtre etait reconstruit a froid a chaque
--- Alt+Tab et pouvait donc etre incomplet. Le filtre est desormais
--- permanent et tenu a jour par evenements : il est la source de verite,
--- et cette seconde passe ne rattrape plus rien.
+-- La 0.9.0 l'avait desactivee en supposant qu'un filtre permanent
+-- suffisait. C'est faux, pour deux raisons lues dans window_filter.lua :
 --
--- Si une fenetre venait a manquer dans la grille, repasser a true.
-obj.completeWithAllWindows = false
+-- 1. Une application n'entre dans le filtre que si app:focusedWindow()
+--    repond, sinon elle part dans une echelle de reessais de 0,2 s a
+--    1,2 s dont seul le dernier force l'inscription : 4,2 s au total.
+--    Une application dont toutes les fenetres sont reduites n'a pas de
+--    fenetre focalisee, donc elle est absente du filtre pendant les
+--    quatre premieres secondes suivant le demarrage.
+--
+-- 2. A l'inscription, le filtre n'enumere que l'espace courant
+--    (getCurrentSpaceAppWindows, avec un TODO explicite en commentaire
+--    sur l'impossibilite de faire mieux).
+--
+-- Le filtre n'est donc pas une source de verite complete, et cette
+-- passe est ce qui rattrape ses deux angles morts.
+obj.completeWithAllWindows = true
 
 -- Filet de securite derriere l'eventtap flagsChanged. L'ancien code
 -- sondait le clavier toutes les 10 ms pendant toute la duree du switch.
