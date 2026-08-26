@@ -31,21 +31,28 @@ ctl.axMode="vide";   R.check("aucune fenêtre : 0",       obj:countWindows(app),
 ctl.axMode="erreur"; R.check("AX muette : nil, pas 0",   obj:countWindows(app), nil)
 ctl.axMode="ok";     R.check("application absente : nil", obj:countWindows(nil), nil)
 
-R.section("isDockApplication : filtre kind()")
-R.check("application du Dock",     obj:isDockApplication(lib.app(ctl,{name="S",bundle="b",kind=1})), true)
-R.check("agent barre de menus",    obj:isDockApplication(lib.app(ctl,{name="A",bundle="b",kind=0})), false)
-R.check("daemon",                  obj:isDockApplication(lib.app(ctl,{name="D",bundle="b",kind=-1})), false)
-R.check("nil",                     obj:isDockApplication(nil), false)
+R.section("canHaveWindows : optimisation, pas une règle")
+R.check("application du Dock",  obj:canHaveWindows(lib.app(ctl,{name="S",bundle="b",kind=1})), true)
+R.check("utilitaire de barre de menus : suivi lui aussi",
+                                obj:canHaveWindows(lib.app(ctl,{name="A",bundle="b",kind=0})), true)
+R.check("daemon sans interface : écarté",
+                                obj:canHaveWindows(lib.app(ctl,{name="D",bundle="b",kind=-1})), false)
+R.check("nil",                  obj:canHaveWindows(nil), false)
 
-R.section("Cohérence entre le scan et le chemin événementiel")
+R.section("Aucune application n'est protégée par son type")
 obj.blacklistBundleIDs={}; obj.blacklistAppNames={}
 local dock    = { app=lib.app(ctl,{name="Safari",bundle="com.apple.Safari",kind=1}), bundleID="com.apple.Safari", name="Safari" }
-local menulet = { app=lib.app(ctl,{name="Util",bundle="com.util",kind=0}), bundleID="com.util", name="Util" }
+local menulet = { app=lib.app(ctl,{name="WARP",bundle="com.cloudflare.1dot1dot1dot1.macos",kind=0}), bundleID="com.cloudflare.1dot1dot1dot1.macos", name="WARP" }
 R.check("application du Dock : éligible", (obj:isApplicationAllowed(dock)), true)
-local ok, why = obj:isApplicationAllowed(menulet)
-R.check("utilitaire barre de menus : refusé", ok, false)
-R.check("motif", why, "pas d'icone dans le Dock")
+R.check("utilitaire de barre de menus : éligible aussi", (obj:isApplicationAllowed(menulet)), true)
 R.check("app introuvable : pas d'exclusion abusive", (obj:isApplicationAllowed({bundleID="x", name="X"})), true)
+
+-- la protection passe par la liste d'exclusion, comme pour tout le reste
+obj.blacklistBundleIDs = { ["com.cloudflare.1dot1dot1dot1.macos"] = true }
+local ok2, why2 = obj:isApplicationAllowed(menulet)
+R.check("protégeable via ignored-bundles.txt", ok2, false)
+R.check("motif", why2, "blacklist")
+obj.blacklistBundleIDs = {}
 
 R.section("isWindowStillPresent")
 local holder = lib.app(ctl, {name="H", bundle="com.h"})
@@ -91,16 +98,26 @@ R.check("délai ancré sur la première détection", pending and pending.started
 R.check("pid mémorisé pour l'annulation", pending and pending.pid, 4242)
 
 R.section("Coût du scan")
-ctl.runningApps = {
-    lib.app(ctl,{name="Safari",bundle="com.apple.Safari",kind=1,windows={W{id=1}}}),
-    lib.app(ctl,{name="Finder",bundle="com.apple.finder",kind=1,windows={W{id=2}}}),
-    lib.app(ctl,{name="Agent", bundle="com.agent",       kind=0,windows={W{id=3}}}),
-    lib.app(ctl,{name="Daemon",bundle="com.daemon",      kind=-1,windows={}}),
-}
+ctl.runningApps = {}
+table.insert(ctl.runningApps, lib.app(ctl,{name="Safari",bundle="com.apple.Safari",kind=1,windows={W{id=1}}}))
+table.insert(ctl.runningApps, lib.app(ctl,{name="Finder",bundle="com.apple.finder",kind=1,windows={W{id=2}}}))
+table.insert(ctl.runningApps, lib.app(ctl,{name="WARP",  bundle="com.warp",        kind=0,windows={W{id=3}}}))
+for i = 1, 20 do
+    table.insert(ctl.runningApps, lib.app(ctl,{name="d"..i, bundle="com.d"..i, kind=-1}))
+end
 obj.blacklistBundleIDs={["com.apple.finder"]=true}
 obj.windowCounts={}; obj.pendingQuits={}
 ctl.axCalls = 0
 obj:scanWindowTransitions(true)
-R.check("1 requête AX pour 4 applications", ctl.axCalls, 1)
+R.check("23 process, 2 requêtes AX", ctl.axCalls, 2)
+R.check("les 20 daemons sont écartés d'office", ctl.axCalls < 3, true)
+obj.blacklistBundleIDs={}
+
+R.section("Le journal donne l'identifiant à la fermeture")
+R.check("libellé avec bundleID",
+        obj:appLogLabel({name="Cloudflare WARP", bundleID="com.cloudflare.1dot1dot1dot1.macos"}),
+        "Cloudflare WARP [com.cloudflare.1dot1dot1dot1.macos]")
+R.check("sans bundleID : nom seul", obj:appLogLabel({name="Sans bundle"}), "Sans bundle")
+R.check("sans rien", obj:appLogLabel(nil), "Application inconnue")
 
 R.finish()

@@ -1,7 +1,7 @@
 ------------------------------------------------------------
 -- LastWindowQuits Spoon
 --
--- Version : 1.5.1
+-- Version : 1.6.0
 --
 -- Ferme automatiquement une application quand sa derniere
 -- fenetre est fermee, avec delai, blacklist, pause temporaire
@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.5.1"
+obj.version = "1.6.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -1060,6 +1060,35 @@ end
 -- INFORMATIONS APPLICATION
 ------------------------------------------------------------
 
+-- Libelle destine au journal. Le bundleID est deja en memoire a ce
+-- moment-la : l'afficher ne coute rien, et evite d'avoir a le
+-- retrouver a la main pour alimenter ignored-bundles.txt.
+
+function obj:appLogLabel(appInfo)
+
+    if not appInfo then
+
+        return "Application inconnue"
+
+    end
+
+
+    if appInfo.bundleID then
+
+        return (appInfo.name or appInfo.bundleID)
+            .. " ["
+            .. appInfo.bundleID
+            .. "]"
+
+    end
+
+
+    return appInfo.name
+        or "Application inconnue"
+
+end
+
+
 function obj:appInfoFromWindow(window, appName)
 
     local application =
@@ -1432,20 +1461,6 @@ function obj:isApplicationAllowed(appInfo)
     end
 
 
-    -- Meme critere que le scan de secours, sinon les deux chemins se
-    -- contredisent : le scan ne fermerait jamais un utilitaire de
-    -- barre de menus, mais la fermeture de sa fenetre de preferences
-    -- le ferait quand meme.
-
-    if appInfo.app
-        and not self:isDockApplication(appInfo.app) then
-
-        return false,
-            "pas d'icone dans le Dock"
-
-    end
-
-
     return true,
         "eligible"
 
@@ -1625,7 +1640,17 @@ function obj:isWindowStillPresent(window)
 end
 
 
-function obj:isDockApplication(application)
+-- Optimisation pure, sans effet sur ce qui est fermable.
+--
+-- kind() < 0 : process sans aucune interface possible. Il ne peut pas
+-- avoir de fenetre, donc l'interroger coute une requete AX pour un
+-- resultat connu d'avance. C'est le meme filtre que hs.window.allWindows.
+--
+-- Les utilitaires de barre de menus (kind 0) sont bien pris en compte :
+-- pour en proteger un, il faut l'ajouter a ignored-bundles.txt, comme
+-- n'importe quelle autre application.
+
+function obj:canHaveWindows(application)
 
     if not application then
 
@@ -1633,12 +1658,6 @@ function obj:isDockApplication(application)
 
     end
 
-
-    -- kind() > 0 : application avec interface et icone dans le Dock.
-    -- En dessous on trouve les agents, les daemons et les utilitaires
-    -- de barre de menus. Ce test sert deux fois : il evite une requete
-    -- AX par process a chaque scan, et il empeche de fermer un
-    -- utilitaire de barre de menus quand on referme ses preferences.
 
     local ok,
           kind =
@@ -1653,7 +1672,7 @@ function obj:isDockApplication(application)
 
     return ok
         and kind ~= nil
-        and kind > 0
+        and kind >= 0
 
 end
 
@@ -1807,7 +1826,7 @@ function obj:scanWindowTransitions(initial)
             nil
 
 
-        if self:isDockApplication(application) then
+        if self:canHaveWindows(application) then
 
             appInfo =
                 self:appInfoFromApplication(application)
@@ -2555,7 +2574,7 @@ function obj:confirmAndQuit(bundleID, name)
     self:log(
         string.format(
             "Quit execute pour %s : %s",
-            self:appDisplayName(appInfo),
+            self:appLogLabel(appInfo),
             tostring(ok and result ~= false)
         ),
         true
