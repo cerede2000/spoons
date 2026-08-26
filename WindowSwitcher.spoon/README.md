@@ -140,12 +140,20 @@ spoon.WindowSwitcher.badges.minimized.color = { red = 0.98, green = 0.62, blue =
 
 ### Fermer une fenetre
 
-Une croix rouge apparait dans le coin de la vignette **visee**, et
-seulement quand la souris est en jeu : au clavier elle n'aurait aucune
-cible, et affichee sur toutes les tuiles elle encombrerait la grille.
+Le feu de fermeture apparait **en haut a gauche** de la vignette visee,
+a la place qu'il occupe sur une fenetre macOS, et seulement quand la
+souris est en jeu : au clavier il n'aurait aucune cible, et affiche sur
+toutes les tuiles il encombrerait la grille. Les pastilles d'etat sont
+donc posees a droite, de droite a gauche.
+
+Ce n'est pas un glyphe de police mais le bouton du systeme redessine :
+disque `#FF5F57` borde de `#E0443E`, et une croix faite de deux segments
+a bouts arrondis couvrant quatre dixiemes du disque, comme celle que
+macOS dessine au survol.
+
 Sa cible de clic est posee apres celle de la tuile, donc elle recoit le
-clic en premier — sans quoi la croix activerait la fenetre au lieu de
-la fermer.
+clic en premier — sans quoi elle activerait la fenetre au lieu de la
+fermer.
 
 Au clavier, `W` ferme la fenetre visee. La session continue tant qu'il
 reste des fenetres ; fermer la derniere la termine.

@@ -354,11 +354,12 @@ local els = {}
 obj:badgeElements(els, { id = 6, minimized = true, hidden = true },
     { x = 100, y = 50, w = 200, h = 150 })
 R.check("deux pastilles, fond et glyphe pour chacune", #els, 4)
-R.check("la première est dans le coin de la vignette", els[1].frame.x, 106)
-R.check("la seconde est décalée",
-    els[3].frame.x, 106 + obj.badgeSize + obj.badgeGap)
-R.check("elles restent dans la vignette",
-    els[3].frame.x + obj.badgeSize < 100 + 200, true)
+-- le coin supérieur gauche revient au bouton de fermeture
+R.check("la première est calée à droite de la vignette",
+    els[1].frame.x, 100 + 200 - obj.badgeSize - 6)
+R.check("la seconde se pose à sa gauche",
+    els[3].frame.x, 100 + 200 - 6 - (2 * obj.badgeSize) - obj.badgeGap)
+R.check("elles restent dans la vignette", els[3].frame.x > 100, true)
 R.check("chaque pastille a sa couleur", els[1].fillColor, obj.badges.minimized.color)
 R.check("couleurs distinctes selon la nature",
     els[3].fillColor ~= els[1].fillColor, true)
@@ -448,11 +449,26 @@ obj:closeButtonElements(els2, { index = 1 }, { x = 0, y = 0, w = 200, h = 150 },
 R.check("tuile non visée : aucune croix", #els2, 0)
 
 obj:closeButtonElements(els2, { index = 1 }, { x = 0, y = 0, w = 200, h = 150 }, true)
-R.check("tuile visée : rond, glyphe et cible", #els2, 3)
-R.check("placée en haut à droite de la vignette",
-    els2[1].frame.x, 200 - obj.closeButtonSize - 6)
-R.check("la cible porte son identifiant", els2[3].id, "close:1")
-R.check("elle est cliquable", els2[3].trackMouseUp, true)
+R.check("tuile visée : disque, deux traits et cible", #els2, 4)
+R.check("c'est un vrai disque, pas un carré arrondi", els2[1].type, "circle")
+R.check("aux couleurs du feu macOS", els2[1].fillColor, obj.closeButtonColor)
+R.check("placé en haut à gauche, comme sur une fenêtre",
+    els2[1].center.x, 6 + obj.closeButtonSize / 2)
+R.check("la croix est faite de segments", els2[2].type, "segments")
+R.check("à bouts arrondis", els2[2].strokeCapStyle, "round")
+R.check("deux traits croisés", els2[3].type, "segments")
+R.check("le second part de l'autre coin",
+    els2[3].coordinates[1].x > els2[2].coordinates[1].x, true)
+R.check("la cible porte son identifiant", els2[4].id, "close:1")
+R.check("elle est cliquable", els2[4].trackMouseUp, true)
+
+R.section("La croix et les pastilles ne se marchent pas dessus")
+local melange = {}
+obj:badgeElements(melange, { id = 20, minimized = true, hidden = true },
+    { x = 0, y = 0, w = 200, h = 150 })
+local plusAGauche = math.min(melange[1].frame.x, melange[3].frame.x)
+R.check("les pastilles restent à droite du bouton",
+    plusAGauche > 6 + obj.closeButtonSize, true)
 
 obj.showCloseButton = false
 local els3 = {}

@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.14.0"
+obj.version = "0.15.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -211,15 +211,30 @@ obj.enableCancelKey = true
 -- encombrerait la grille.
 obj.showCloseButton = true
 
-obj.closeButtonSize = 21
+obj.closeButtonSize = 19
 
-obj.closeGlyph = "✕"
-
+-- Couleurs du feu de fermeture de macOS : #FF5F57 pour le disque,
+-- #E0443E pour son bord. La croix n'est pas un glyphe de police mais
+-- deux segments a bouts arrondis, comme celle que dessine le systeme.
 obj.closeButtonColor = {
-    red = 0.94,
-    green = 0.27,
-    blue = 0.24,
-    alpha = 0.97,
+    red = 1.00,
+    green = 0.373,
+    blue = 0.341,
+    alpha = 1,
+}
+
+obj.closeButtonStrokeColor = {
+    red = 0.878,
+    green = 0.267,
+    blue = 0.243,
+    alpha = 1,
+}
+
+obj.closeGlyphColor = {
+    red = 0.30,
+    green = 0.02,
+    blue = 0.02,
+    alpha = 0.85,
 }
 
 -- W ferme la fenetre visee au clavier. Le code physique est lu sur la
@@ -4369,8 +4384,12 @@ function obj:badgeElements(elements, descriptor, thumbFrame)
         self:stateBadges(descriptor)
 
 
+    -- Le coin superieur gauche revient au bouton de fermeture, comme
+    -- sur une fenetre macOS : les pastilles passent a droite et se
+    -- posent de droite a gauche.
+
     local x =
-        thumbFrame.x + 6
+        thumbFrame.x + thumbFrame.w - self.badgeSize - 6
 
 
     local y =
@@ -4430,7 +4449,7 @@ function obj:badgeElements(elements, descriptor, thumbFrame)
 
 
         x =
-            x + self.badgeSize + self.badgeGap
+            x - self.badgeSize - self.badgeGap
 
     end
 
@@ -4667,9 +4686,11 @@ function obj:closeButtonElements(elements, item, thumbFrame, isSelected)
         self.closeButtonSize
 
 
+    -- En haut a gauche, comme le feu de fermeture d'une fenetre macOS.
+
     local frame =
         {
-            x = thumbFrame.x + thumbFrame.w - size - 6,
+            x = thumbFrame.x + 6,
             y = thumbFrame.y + 6,
             w = size,
             h = size,
@@ -4679,46 +4700,64 @@ function obj:closeButtonElements(elements, item, thumbFrame, isSelected)
     table.insert(
         elements,
         {
-            type = "rectangle",
+            type = "circle",
             action = "strokeAndFill",
-            frame = frame,
-            roundedRectRadii = rounded(math.floor(size / 2)),
-            fillColor = self.closeButtonColor,
-            strokeColor = self:themeColor("badgeTextColor"),
-            strokeWidth = self.badgeStrokeWidth,
-        }
-    )
-
-
-    table.insert(
-        elements,
-        {
-            type = "text",
-            frame = {
-                x = frame.x,
-                y = frame.y + math.floor((size - self.badgeTextSize) / 2) - 2,
-                w = size,
-                h = size,
+            center = {
+                x = frame.x + (size / 2),
+                y = frame.y + (size / 2),
             },
-            text = safeCall(function()
-
-                return styledtext.new(
-                    self.closeGlyph,
-                    {
-                        font = {
-                            name = ".AppleSystemUIFont",
-                            size = self.badgeTextSize,
-                        },
-                        color = self:themeColor("badgeTextColor"),
-                        paragraphStyle = {
-                            alignment = "center",
-                        },
-                    }
-                )
-
-            end) or self.closeGlyph,
+            radius = (size / 2) - 0.5,
+            fillColor = self.closeButtonColor,
+            strokeColor = self.closeButtonStrokeColor,
+            strokeWidth = 1,
         }
     )
+
+
+    -- La croix du systeme occupe environ quatre dixiemes du disque.
+
+    local inset =
+        size * 0.30
+
+
+    local thickness =
+        math.max(1, size * 0.095)
+
+
+    local left =
+        frame.x + inset
+
+
+    local right =
+        frame.x + size - inset
+
+
+    local top =
+        frame.y + inset
+
+
+    local bottom =
+        frame.y + size - inset
+
+
+    for _, stroke in ipairs({
+        { { x = left, y = top }, { x = right, y = bottom } },
+        { { x = right, y = top }, { x = left, y = bottom } },
+    }) do
+
+        table.insert(
+            elements,
+            {
+                type = "segments",
+                action = "stroke",
+                coordinates = stroke,
+                strokeColor = self.closeGlyphColor,
+                strokeWidth = thickness,
+                strokeCapStyle = "round",
+            }
+        )
+
+    end
 
 
     table.insert(
