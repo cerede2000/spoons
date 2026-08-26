@@ -234,17 +234,24 @@ obj.seenApps =
 
 
 -- Le WindowServer ne sait pas repondre a la question qu'on lui posait.
--- Mesure faite sur macOS 26, une fenetre ouverte puis fermee dans une
--- application qui continue de tourner :
+-- Mesure refaite sur macOS 26 avec de vraies NSWindow, en distinguant
+-- une fenetre DETRUITE d'une fenetre seulement retiree de l'ecran :
 --
---   ouverte  CGSCopySpacesForWindows [1]   CGWindowList presente
---   fermee   CGSCopySpacesForWindows [1]   CGWindowList presente
---   bidon    CGSCopySpacesForWindows []    CGWindowList absente
+--   ouverte, visible        spaces=[1]    onScreen=oui
+--   sur un autre bureau     spaces=[204]  onScreen=NON
+--   orderOut (retiree)      spaces=[1]    onScreen=NON
+--   FERMEE (detruite)       spaces=[]     onScreen=NON
+--   identifiant bidon       spaces=[]     absente de CGWindowList
 --
--- Une fenetre fermee est indiscernable d'une fenetre vivante tant que
--- son application vit. C'est le meme constat que celui note dans le
--- code d'AltTab. Le recoupement rendait donc certaines applications
--- definitivement infermables, et il a ete retire.
+-- Une fenetre reellement detruite perd bien son bureau. Mais AppKit
+-- garde tres souvent la NSWindow apres que l'utilisateur a ferme la
+-- fenetre : elle est alors seulement orderOut, donc encore posee sur un
+-- bureau -- exactement comme une fenetre situee sur un autre bureau.
+--
+-- Ces deux etats sont indiscernables : "fermee mais retenue par
+-- l'application" et "ouverte sur un autre bureau" repondent la meme
+-- chose. C'est ce qui rendait IINA definitivement infermable, et c'est
+-- pourquoi le recoupement a ete retire.
 --
 -- Ce qui remplace : ne jamais conclure sur une seule observation. Un
 -- aveuglement de l'accessibilite dure quelques secondes, une fermeture

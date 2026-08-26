@@ -171,23 +171,35 @@ etait quittee sans que personne n'ait rien ferme.
 ### Ce que le WindowServer ne peut pas nous dire
 
 La tentation est d'aller demander au WindowServer, qui lui voit tous les
-bureaux. Mesure faite sur macOS 26, une fenetre ouverte puis fermee dans
-une application qui continue de tourner :
+bureaux. Mesure faite sur macOS 26 avec de vraies `NSWindow`, en
+separant une fenetre **detruite** d'une fenetre seulement retiree de
+l'ecran :
 
-| | `CGSCopySpacesForWindows` | `CGWindowListCreateDescription` |
+| etat | `CGSCopySpacesForWindows` | `onScreen` |
 |---|---|---|
-| fenetre ouverte | `[1]` | presente |
-| **fenetre fermee** | `[1]` | **presente** |
-| identifiant bidon | `[]` | absente |
+| ouverte, visible | `[1]` | oui |
+| sur un autre bureau | `[204]` | non |
+| `orderOut` (retiree de l'ecran) | `[1]` | non |
+| **fermee (detruite)** | `[]` | non |
+| identifiant bidon | `[]` | absente de `CGWindowList` |
 
-**Une fenetre fermee est indiscernable d'une fenetre vivante** tant que
-son application vit. Le meme constat figure dans le code d'AltTab, qui
-en tire la meme conclusion : ce signal dit seulement « le WindowServer
-n'a pas oublie cet identifiant », ce qui est beaucoup plus faible.
+Une fenetre reellement detruite perd donc bien son bureau — contrairement
+a ce qu'une premiere mesure, faite sur une fenetre seulement `orderOut`,
+avait laisse croire.
 
-Une version l'a utilise comme preuve d'existence : certaines
-applications sont alors devenues definitivement infermables. Le
-recoupement a ete retire.
+Cela ne sauve pas le recoupement pour autant. AppKit garde tres souvent
+la `NSWindow` apres que l'utilisateur a ferme la fenetre : elle est
+alors seulement `orderOut`, donc **encore posee sur un bureau**. Or une
+fenetre situee sur un autre bureau repond exactement la meme chose.
+
+**« Fermee mais retenue par l'application » et « ouverte sur un autre
+bureau » sont indiscernables.** C'est ce qui rendait IINA definitivement
+infermable. Le meme constat figure dans le code d'AltTab. Le recoupement
+a ete retire.
+
+Le switcher, lui, se sert de cette meme API sans risque : il ne pose que
+la question de la **position** d'une fenetre dont il sait deja qu'elle
+est vivante, et une reponse vide y vaut « ici ».
 
 ### Ce qui reste sur
 
