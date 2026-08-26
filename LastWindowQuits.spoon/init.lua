@@ -1,7 +1,7 @@
 ------------------------------------------------------------
 -- LastWindowQuits Spoon
 --
--- Version : 1.6.0
+-- Version : 1.7.0
 --
 -- Ferme automatiquement une application quand sa derniere
 -- fenetre est fermee, avec delai, blacklist, pause temporaire
@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.6.0"
+obj.version = "1.7.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -112,6 +112,15 @@ obj.windowTransitionFallbackEnabled = true
 -- creations et fermetures : ce scan ne rattrape que les evenements
 -- manques, il n'a pas besoin d'etre rapide.
 obj.windowTransitionScanInterval = 5
+
+-- Periode du balayage complet.
+--
+-- Entre deux balayages, le scan n'interroge que les applications qu'il
+-- sait avoir des fenetres : ce sont les seules qui peuvent en perdre
+-- la derniere. Les autres sont decouvertes par l'evenement
+-- windowCreated, et le balayage complet sert de rattrapage si cet
+-- evenement a ete manque.
+obj.windowTransitionFullScanInterval = 30
 
 -- Nombre maximum d'applications qu'un seul scan peut condamner.
 -- Au-dela, la cause n'est pas l'utilisateur qui ferme des fenetres
@@ -251,6 +260,10 @@ obj.clickTimer =
 
 obj.lastLogCleanupAt =
     0
+
+
+obj.lastFullScanAt =
+    nil
 
 
 obj.logCleanupInProgress =
@@ -1776,6 +1789,23 @@ function obj:windowTransitionScanPeriod()
 end
 
 
+function obj:windowTransitionFullScanPeriod()
+
+    local interval =
+        tonumber(self.windowTransitionFullScanInterval) or 30
+
+
+    -- Un balayage complet plus frequent que le scan lui-meme n'aurait
+    -- aucun sens : tous les ticks deviendraient complets.
+
+    return math.max(
+        self:windowTransitionScanPeriod(),
+        interval
+    )
+
+end
+
+
 function obj:isWindowTransitionFallbackEnabled()
 
     local interval =
@@ -1816,6 +1846,33 @@ function obj:scanWindowTransitions(initial)
         {}
 
 
+    --------------------------------------------------------
+    -- Un balayage complet interroge toutes les applications pour
+    -- etablir les references. Les ticks intermediaires se limitent a
+    -- celles qui ont des fenetres : une application sans fenetre
+    -- connue ne peut pas perdre sa derniere, et son apparition est
+    -- deja signalee par windowCreated.
+    --------------------------------------------------------
+
+    local now =
+        self:now()
+
+
+    local fullScan =
+        initial == true
+        or self.lastFullScanAt == nil
+        or (now - self.lastFullScanAt)
+            >= self:windowTransitionFullScanPeriod()
+
+
+    if fullScan then
+
+        self.lastFullScanAt =
+            now
+
+    end
+
+
     for _, application in ipairs(hs.application.runningApplications()) do
 
         local appInfo =
@@ -1852,44 +1909,65 @@ function obj:scanWindowTransitions(initial)
 
         if key then
 
-            local count =
-                self:countWindows(application)
+            local previous =
+                previousCounts[key]
 
 
-            currentCounts[key] =
-                count
+            --------------------------------------------------
+            -- Hors balayage complet, une application sans fenetre
+            -- connue n'a rien a nous apprendre : elle ne peut pas
+            -- perdre une derniere fenetre qu'elle n'a pas, et son
+            -- apparition passe par windowCreated. On garde sa
+            -- reference sans payer la requete AX.
+            --------------------------------------------------
 
-
-            if count == nil then
-
-                -- Comptage indisponible : on ne conclut rien et on
-                -- conserve le dernier etat connu pour cette
-                -- application.
+            if not fullScan
+                and (previous == nil or previous == 0) then
 
                 currentCounts[key] =
-                    previousCounts[key]
+                    previous
 
-            elseif count > 0 then
+            else
 
-                self:markSeen(appInfo)
+                local count =
+                    self:countWindows(application)
 
-                self:cancelPendingQuit(
-                    appInfo,
-                    "nouvelle fenetre detectee par scan"
-                )
 
-            elseif initial ~= true
-                and previousCounts[key]
-                and previousCounts[key] > 0 then
+                currentCounts[key] =
+                    count
 
-                -- Candidat a la fermeture. On ne decide pas ici : la
-                -- decision depend du nombre total de candidats de ce
-                -- scan.
 
-                table.insert(
-                    dropped,
-                    appInfo
-                )
+                if count == nil then
+
+                    -- Comptage indisponible : on ne conclut rien et
+                    -- on conserve le dernier etat connu.
+
+                    currentCounts[key] =
+                        previous
+
+                elseif count > 0 then
+
+                    self:markSeen(appInfo)
+
+                    self:cancelPendingQuit(
+                        appInfo,
+                        "nouvelle fenetre detectee par scan"
+                    )
+
+                elseif initial ~= true
+                    and previous
+                    and previous > 0 then
+
+                    -- Candidat a la fermeture. On ne decide pas ici :
+                    -- la decision depend du nombre total de candidats
+                    -- de ce scan.
+
+                    table.insert(
+                        dropped,
+                        appInfo
+                    )
+
+                end
 
             end
 

@@ -97,21 +97,61 @@ R.check("un seul quit armé", armed, 1)
 R.check("délai ancré sur la première détection", pending and pending.startedAt, 1000)
 R.check("pid mémorisé pour l'annulation", pending and pending.pid, 4242)
 
-R.section("Coût du scan")
+R.section("Coût du scan : deux vitesses")
+-- 3 applications avec fenêtres, 2 sans, 20 daemons
 ctl.runningApps = {}
-table.insert(ctl.runningApps, lib.app(ctl,{name="Safari",bundle="com.apple.Safari",kind=1,windows={W{id=1}}}))
-table.insert(ctl.runningApps, lib.app(ctl,{name="Finder",bundle="com.apple.finder",kind=1,windows={W{id=2}}}))
-table.insert(ctl.runningApps, lib.app(ctl,{name="WARP",  bundle="com.warp",        kind=0,windows={W{id=3}}}))
+table.insert(ctl.runningApps, lib.app(ctl,{name="Safari",bundle="com.safari",kind=1,windows={W{id=1}}}))
+table.insert(ctl.runningApps, lib.app(ctl,{name="Notes", bundle="com.notes", kind=1,windows={W{id=2}}}))
+table.insert(ctl.runningApps, lib.app(ctl,{name="WARP",  bundle="com.warp",  kind=0,windows={W{id=3}}}))
+table.insert(ctl.runningApps, lib.app(ctl,{name="Vide1", bundle="com.vide1", kind=0,windows={}}))
+table.insert(ctl.runningApps, lib.app(ctl,{name="Vide2", bundle="com.vide2", kind=0,windows={}}))
 for i = 1, 20 do
     table.insert(ctl.runningApps, lib.app(ctl,{name="d"..i, bundle="com.d"..i, kind=-1}))
 end
-obj.blacklistBundleIDs={["com.apple.finder"]=true}
+obj.blacklistBundleIDs={}; obj.blacklistAppNames={}
 obj.windowCounts={}; obj.pendingQuits={}
+obj.windowTransitionFallbackEnabled=true
+obj.windowTransitionScanInterval=5
+obj.windowTransitionFullScanInterval=30
+obj.lastFullScanAt=nil
+obj.enabled=true; obj.running=true; obj.powerSuspended=false
+
 ctl.axCalls = 0
 obj:scanWindowTransitions(true)
-R.check("23 process, 2 requêtes AX", ctl.axCalls, 2)
-R.check("les 20 daemons sont écartés d'office", ctl.axCalls < 3, true)
-obj.blacklistBundleIDs={}
+R.check("balayage complet : 25 process, 5 requêtes", ctl.axCalls, 5)
+R.check("les 20 daemons écartés d'office", ctl.axCalls, 5)
+
+ctl.axCalls = 0
+obj:scanWindowTransitions(false)
+R.check("tick suivant : seules les 3 avec fenêtres", ctl.axCalls, 3)
+
+-- une application qui gagne une fenêtre est vue par l'événement,
+-- pas par le tick partiel
+ctl.runningApps[4]._windows = { W{id=9} }
+ctl.axCalls = 0
+obj:scanWindowTransitions(false)
+R.check("nouvelle fenêtre non vue par le tick partiel", ctl.axCalls, 3)
+obj:onWindowCreated(W{id=9, app=ctl.runningApps[4]}, "Vide1")
+ctl.axCalls = 0
+obj:scanWindowTransitions(false)
+R.check("windowCreated l'a fait entrer dans le suivi", ctl.axCalls, 4)
+
+-- le balayage complet rattrape même sans événement
+ctl.runningApps[5]._windows = { W{id=10} }
+obj.lastFullScanAt = nil
+ctl.axCalls = 0
+obj:scanWindowTransitions(false)
+R.check("balayage complet : tout le monde à nouveau", ctl.axCalls, 5)
+
+R.section("Le filet fonctionne toujours")
+-- Safari perd sa dernière fenêtre : détecté par le tick partiel
+ctl.runningApps[1]._windows = {}
+obj.seenApps={["com.safari"]=true}
+obj.startupGracePeriod=0; obj.startedAt=0; obj.quitDelay=5
+ctl.timers={}; ctl.killed={}
+obj:scanWindowTransitions(false)
+local armed=0 for _ in pairs(obj.pendingQuits) do armed=armed+1 end
+R.check("fermeture détectée par un tick partiel", armed, 1)
 
 R.section("Le journal donne l'identifiant à la fermeture")
 R.check("libellé avec bundleID",
