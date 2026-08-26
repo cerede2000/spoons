@@ -1,0 +1,6 @@
+# Une ligne par bundle ID.
+# Les lignes vides et les commentaires sont ignores.
+
+com.apple.controlcenter
+com.apple.notificationcenterui
+pro.bettercmdtab.BetterCmdTab

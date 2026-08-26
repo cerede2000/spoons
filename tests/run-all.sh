@@ -13,7 +13,10 @@ for pair in \
     "lwq_config:LastWindowQuits.spoon/init.lua" \
     "finder_cutpaste:FinderCutPaste.spoon/init.lua" \
     "sm_menu:SpoonManager.spoon/init.lua" \
-    "sm_robustesse:SpoonManager.spoon/init.lua" ; do
+    "sm_robustesse:SpoonManager.spoon/init.lua" \
+    "ws_fenetres:WindowSwitcher.spoon/init.lua" \
+    "ws_capture:WindowSwitcher.spoon/init.lua" \
+    "ws_session:WindowSwitcher.spoon/init.lua" ; do
     suite=${pair%%:*}; target=${pair#*:}
     line=$(lua "tests/$suite.lua" "$target" 2>&1 | grep -oE '^=> [0-9]+/[0-9]+' || echo "=> ERREUR")
     n=$(echo "$line" | grep -oE '[0-9]+/[0-9]+' | cut -d/ -f1)

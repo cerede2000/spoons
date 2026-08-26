@@ -11,6 +11,7 @@ Modules [Hammerspoon](https://www.hammerspoon.org), chargés et pilotés par
 | [WireGuardVPN](WireGuardVPN.spoon/) | connexion WireGuard depuis la barre des menus |
 | [FinderCutPaste](FinderCutPaste.spoon/) | couper/coller de fichiers dans le Finder, façon Windows |
 | [FinderPermanentDelete](FinderPermanentDelete.spoon/) | Maj+Suppr = suppression définitive dans le Finder |
+| [WindowSwitcher](WindowSwitcher.spoon/) | Option+Tab par fenêtre, grille d'aperçus réels |
 
 ## Installation
 
@@ -31,7 +32,7 @@ Chaque Spoon expose sa configuration en tête de fichier, sous
 
 ## Tests
 
-251 cas, exécutables sans Hammerspoon — voir [tests/](tests/).
+379 cas, exécutables sans Hammerspoon — voir [tests/](tests/).
 
 ```bash
 sh tests/run-all.sh

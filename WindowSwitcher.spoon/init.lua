@@ -1,0 +1,4643 @@
+------------------------------------------------------------
+-- WindowSwitcher Spoon
+--
+-- Switcher de fenetres facon Alt-Tab, avec grille de captures.
+------------------------------------------------------------
+
+
+local obj = {}
+
+obj.__index = obj
+
+local canvas =
+    require("hs.canvas")
+
+local eventtap =
+    require("hs.eventtap")
+
+local fs =
+    require("hs.fs")
+
+local hash =
+    require("hs.hash")
+
+local host =
+    require("hs.host")
+
+local image =
+    require("hs.image")
+
+local screen =
+    require("hs.screen")
+
+local styledtext =
+    require("hs.styledtext")
+
+local task =
+    require("hs.task")
+
+local timer =
+    require("hs.timer")
+
+local window =
+    require("hs.window")
+
+local windowFilter =
+    require("hs.window.filter")
+
+local unpackTable =
+    table.unpack or unpack
+
+
+
+------------------------------------------------------------
+-- METADONNEES
+------------------------------------------------------------
+
+obj.name = "WindowSwitcher"
+
+obj.version = "0.9.0"
+
+obj.author = "Benjamin Cerede / OpenAI"
+
+obj.homepage = "Local Spoon"
+
+obj.license = "MIT"
+
+
+
+------------------------------------------------------------
+-- CONFIGURATION PUBLIQUE
+------------------------------------------------------------
+
+obj.showNotifications = true
+
+obj.verboseLogging = false
+
+obj.includeMinimized = true
+
+obj.includeHidden = true
+
+obj.includeOtherSpaces = true
+
+obj.excludeEmptyTitles = false
+
+obj.minWindowWidth = 80
+
+obj.minWindowHeight = 60
+
+obj.ignoredBundlesFile = nil
+
+obj.maxColumns = 4
+
+obj.maxRows = 3
+
+obj.maxPanelWidthRatio = 0.78
+
+obj.maxPanelHeightRatio = 0.62
+
+obj.screenMargin = 64
+
+obj.minPanelWidth = 360
+
+obj.minPanelHeight = 240
+
+obj.panelPadding = 30
+
+obj.columnGap = 28
+
+obj.rowGap = 24
+
+obj.labelHeight = 30
+
+obj.labelToPreviewGap = 8
+
+obj.iconSize = 22
+
+obj.placeholderIconScale = 3.1
+
+obj.textSize = 15
+
+obj.panelCornerRadius = 24
+
+obj.tileCornerRadius = 10
+
+obj.canvasPadding = 22
+
+obj.selectedStrokeWidth = 3
+
+obj.previewMaxWidth = 300
+
+obj.previewMaxHeight = 190
+
+obj.previewMinWidth = 95
+
+obj.previewMinHeight = 90
+
+obj.labelMinWidth = 120
+
+obj.labelMaxWidth = 330
+
+obj.snapshotCacheSeconds = 20
+
+obj.screenCaptureHelperEnabled = true
+
+obj.instantVisibleSnapshots = true
+
+obj.maxConcurrentScreenCaptures = 2
+
+obj.enableMouseSelection = true
+
+obj.screenCaptureHelperPath = nil
+
+obj.screenCaptureHelperAppPath = nil
+
+obj.screenCapturePixelHeight = 420
+
+obj.screenCaptureFailureBackoffSeconds = 5
+
+-- Le helper s'accorde lui-meme 5 s par capture et sonde au repos
+-- toutes les 0,35 s : il peut donc legitimement repondre a 5,35 s.
+-- Abandonner a 5 s faisait echouer des captures qui allaient aboutir.
+obj.screenCaptureRequestTimeoutSeconds = 6.5
+
+obj.screenCapturePollIntervalSeconds = 0.08
+
+obj.screenCaptureSessionBaseDirectory = "/tmp/WindowSwitcher"
+
+obj.screenCaptureSessionPrefix = "session-"
+
+obj.disableScreenCaptureHelperAfterCGSAssertion = true
+
+obj.logScreenCaptureFailures = true
+
+obj.stepThrottleSeconds = 0.06
+
+-- Seconde passe d'inventaire via hs.window.allWindows(). Elle rattrape
+-- les fenetres que le filtre n'a pas encore vues, mais c'est un balayage
+-- AX complet de toutes les applications lancees : c'est de loin
+-- l'operation la plus couteuse d'une session. La passer a false divise
+-- environ par deux le cout d'un Alt+Tab, au risque de manquer une
+-- fenetre juste apres un demarrage d'application.
+obj.completeWithAllWindows = true
+
+-- Filet de securite derriere l'eventtap flagsChanged. L'ancien code
+-- sondait le clavier toutes les 10 ms pendant toute la duree du switch.
+obj.modifierSafetyInterval = 0.35
+
+-- Intervalle utilise si l'eventtap n'a pas pu demarrer : la sans lui,
+-- c'est ce timer qui doit rester reactif.
+obj.modifierFallbackInterval = 0.05
+
+-- Les captures qui arrivent en rafale ne doivent pas declencher un
+-- rendu complet chacune.
+obj.redrawCoalesceSeconds = 0.05
+
+obj.snapshotCacheMaxEntries = 200
+
+obj.snapshotCacheMaxAgeSeconds = 600
+
+-- Distance en pixels que la souris doit parcourir avant de reprendre la
+-- main sur la selection clavier.
+obj.mouseActivationDistance = 6
+
+obj.screenCaptureHelperBundleID = "local.hammerspoon.WindowSwitcherCapture"
+
+-- Un raise ne prend pas toujours du premier coup : l'application cible
+-- peut encore etre en train de se demasquer ou de restaurer sa fenetre.
+-- On verifie une fois, peu apres, et on insiste si besoin.
+obj.focusReassertDelay = 0.12
+
+obj.theme = "auto"
+
+obj.lightTheme = {
+    backgroundColor = {
+        red = 0.91,
+        green = 0.94,
+        blue = 0.98,
+        alpha = 0.72,
+    },
+    thumbnailBackgroundColor = {
+        red = 1,
+        green = 1,
+        blue = 1,
+        alpha = 0.28,
+    },
+    labelTextColor = {
+        red = 0.14,
+        green = 0.15,
+        blue = 0.17,
+        alpha = 0.96,
+    },
+    panelStrokeColor = {
+        red = 1,
+        green = 1,
+        blue = 1,
+        alpha = 0.62,
+    },
+    tileStrokeColor = {
+        red = 1,
+        green = 1,
+        blue = 1,
+        alpha = 0.52,
+    },
+    shadowColor = {
+        red = 0,
+        green = 0,
+        blue = 0,
+        alpha = 0.18,
+    },
+    hitTargetColor = {
+        white = 1,
+        alpha = 0.01,
+    },
+    selectedBorderColor = {
+        red = 0.08,
+        green = 0.48,
+        blue = 0.95,
+        alpha = 0.98,
+    },
+}
+
+obj.darkTheme = {
+    backgroundColor = {
+        red = 0.09,
+        green = 0.105,
+        blue = 0.125,
+        alpha = 0.78,
+    },
+    thumbnailBackgroundColor = {
+        red = 1,
+        green = 1,
+        blue = 1,
+        alpha = 0.10,
+    },
+    labelTextColor = {
+        red = 0.91,
+        green = 0.93,
+        blue = 0.96,
+        alpha = 0.98,
+    },
+    panelStrokeColor = {
+        red = 1,
+        green = 1,
+        blue = 1,
+        alpha = 0.16,
+    },
+    tileStrokeColor = {
+        red = 1,
+        green = 1,
+        blue = 1,
+        alpha = 0.18,
+    },
+    shadowColor = {
+        red = 0,
+        green = 0,
+        blue = 0,
+        alpha = 0.34,
+    },
+    hitTargetColor = {
+        white = 1,
+        alpha = 0.01,
+    },
+    selectedBorderColor = {
+        red = 0.23,
+        green = 0.58,
+        blue = 1,
+        alpha = 1,
+    },
+}
+
+obj.backgroundColor = {
+    red = 0.92,
+    green = 0.95,
+    blue = 0.98,
+    alpha = 0.72,
+}
+
+obj.thumbnailBackgroundColor = {
+    red = 1,
+    green = 1,
+    blue = 1,
+    alpha = 0.26,
+}
+
+obj.labelTextColor = {
+    red = 0.16,
+    green = 0.16,
+    blue = 0.16,
+    alpha = 0.96,
+}
+
+obj.selectedBorderColor = {
+    red = 0.08,
+    green = 0.48,
+    blue = 0.95,
+    alpha = 0.98,
+}
+
+obj.unselectedAlpha = 0.90
+
+obj.selectedAlpha = 1.0
+
+obj.excludedBundleIDs = {
+    ["com.apple.controlcenter"] = true,
+    ["com.apple.notificationcenterui"] = true,
+    ["pro.bettercmdtab.BetterCmdTab"] = true,
+}
+
+obj.excludedAppNames = {
+}
+
+obj.allowedWindowRoles = {
+    ["AXStandardWindow"] = true,
+    ["AXDialog"] = true,
+    ["AXSystemDialog"] = true,
+}
+
+
+
+------------------------------------------------------------
+-- VARIABLES INTERNES
+------------------------------------------------------------
+
+obj.hotkeys = {}
+
+obj.hotkeyMapping = nil
+
+obj.isStarted = false
+
+obj.loadedExcludedBundleIDs = nil
+
+
+obj.selectedIndex = nil
+
+obj.switcherCanvas = nil
+
+obj.modifierTimer = nil
+
+obj.snapshotCache = {}
+
+obj.screenCaptureFailureCache = {}
+
+obj.screenCaptureQueue = {}
+
+obj.queuedScreenCaptures = {}
+
+obj.runningScreenCaptures = {}
+
+obj.screenCaptureDisabledReason = nil
+
+obj.screenCapturePollTimer = nil
+
+obj.screenCaptureHelperAppStarted = false
+
+obj.screenCaptureSessionID = nil
+
+obj.screenCaptureSessionSecret = nil
+
+obj.screenCaptureSessionDirectory = nil
+
+obj.iconCache = {}
+
+obj.lastStepAt = nil
+
+obj.entries = nil
+
+obj.descriptorPass = nil
+
+obj.windowFilterInstance = nil
+
+obj.windowFilterSpaceMode = nil
+
+obj.layoutCache = nil
+
+obj.titleCache = {}
+
+obj.redrawTimer = nil
+
+obj.modifierTap = nil
+
+obj.ignoredBundlesSignature = nil
+
+obj.captureFiles = {}
+
+obj.mouseArmed = false
+
+obj.mouseOrigin = nil
+
+
+
+------------------------------------------------------------
+-- LOG / NOTIFICATIONS
+------------------------------------------------------------
+
+function obj:log(message)
+
+    print(
+        string.format(
+            "%s - WindowSwitcher %s - %s",
+            os.date("%Y-%m-%d %H:%M:%S"),
+            self.version,
+            tostring(message)
+        )
+    )
+
+end
+
+
+function obj:debug(message)
+
+    if self.verboseLogging then
+
+        self:log(message)
+
+    end
+
+end
+
+
+function obj:notify(title, message)
+
+    if not self.showNotifications then
+
+        return
+
+    end
+
+
+    hs.notify.new({
+        title = title,
+        informativeText = message,
+    }):send()
+
+end
+
+
+
+------------------------------------------------------------
+-- OUTILS
+------------------------------------------------------------
+
+-- Renvoie valeur, erreur. L'ancienne version ne renvoyait qu'une
+-- valeur : les deux sites qui ecrivaient "Erreur layout canvas : " ..
+-- tostring(err) affichaient donc toujours "nil", et le seul diagnostic
+-- du rendu ne diagnostiquait rien.
+local function safeCall(fn)
+
+    local ok,
+          value =
+        pcall(fn)
+
+
+    if ok then
+
+        return value, nil
+
+    end
+
+
+    return nil, value
+
+end
+
+
+local function trim(value)
+
+    return tostring(value or ""):match("^%s*(.-)%s*$")
+
+end
+
+
+local function rounded(radius)
+
+    return {
+        xRadius = radius,
+        yRadius = radius,
+    }
+
+end
+
+
+function obj:isDarkThemeActive()
+
+    local theme =
+        tostring(self.theme or "auto"):lower()
+
+
+    if theme == "dark" then
+
+        return true
+
+    end
+
+
+    if theme == "light" or theme == "custom" then
+
+        return false
+
+    end
+
+
+    return safeCall(function()
+
+        return host.interfaceStyle() == "Dark"
+
+    end) == true
+
+end
+
+
+function obj:themeColor(name)
+
+    local theme =
+        tostring(self.theme or "auto"):lower()
+
+
+    if theme == "custom" then
+
+        return self[name]
+
+    end
+
+
+    local palette =
+        self:isDarkThemeActive() and self.darkTheme or self.lightTheme
+
+
+    return (palette and palette[name]) or self[name]
+
+end
+
+
+local function shellQuote(value)
+
+    return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+
+end
+
+
+local function bytesToHex(value)
+
+    return (tostring(value or ""):gsub(
+        ".",
+        function(char)
+
+            return string.format("%02x", string.byte(char))
+
+        end
+    ))
+
+end
+
+
+local function readRandomHex(byteCount)
+
+    local file =
+        io.open("/dev/urandom", "rb")
+
+
+    if not file then
+
+        return hash.SHA256(
+            tostring(timer.secondsSinceEpoch())
+                .. tostring(math.random())
+                .. tostring({})
+        )
+
+    end
+
+
+    local value =
+        file:read(byteCount)
+
+
+    file:close()
+
+
+    return bytesToHex(value)
+
+end
+
+
+local function splitLines(value, limit)
+
+    local lines =
+        {}
+
+
+    local text =
+        tostring(value or "")
+
+
+    local start =
+        1
+
+
+    while start <= #text + 1
+        and (not limit or #lines < limit) do
+
+        local stop =
+            text:find("\n", start, true)
+
+
+        if stop then
+
+            table.insert(lines, text:sub(start, stop - 1))
+
+            start =
+                stop + 1
+
+        else
+
+            table.insert(lines, text:sub(start))
+
+            break
+
+        end
+
+    end
+
+
+    return lines
+
+end
+
+
+function obj:getSpoonDirectory()
+
+    local info =
+        debug.getinfo(1, "S")
+
+
+    local source =
+        tostring(info and info.source or "")
+
+
+    if source:sub(1, 1) == "@" then
+
+        source =
+            source:sub(2)
+
+    end
+
+
+    return source:match("^(.*)/init%.lua$")
+
+end
+
+
+function obj:defaultIgnoredBundlesFile()
+
+    local path =
+        self:getSpoonDirectory()
+
+
+    if path then
+
+        return path .. "/ignored-bundles.txt"
+
+    end
+
+
+    return nil
+
+end
+
+
+function obj:defaultScreenCaptureHelperPath()
+
+    local path =
+        self:getSpoonDirectory()
+
+
+    if path then
+
+        local bundledHelper =
+            path .. "/WindowSwitcherCapture.app/Contents/MacOS/window-capture-helper"
+
+
+        if fs.attributes(bundledHelper) then
+
+            return bundledHelper
+
+        end
+
+
+        return path .. "/window-capture-helper"
+
+    end
+
+
+    return nil
+
+end
+
+
+function obj:defaultScreenCaptureHelperAppPath()
+
+    local path =
+        self:getSpoonDirectory()
+
+
+    if path then
+
+        return path .. "/WindowSwitcherCapture.app"
+
+    end
+
+
+    return nil
+
+end
+
+
+function obj:screenCaptureCacheDirectory()
+
+    return self.screenCaptureSessionDirectory
+        or self.screenCaptureSessionBaseDirectory
+
+end
+
+
+function obj:screenCaptureRequestDirectory()
+
+    return self:screenCaptureCacheDirectory() .. "/requests"
+
+end
+
+
+function obj:screenCaptureCaptureDirectory()
+
+    return self:screenCaptureCacheDirectory() .. "/captures"
+
+end
+
+
+function obj:screenCaptureSecretPath()
+
+    return self:screenCaptureCacheDirectory() .. "/secret"
+
+end
+
+
+function obj:screenCaptureRequestPath(jobOrToken)
+
+    local token =
+        type(jobOrToken) == "table" and jobOrToken.token or jobOrToken
+
+    return string.format(
+        "%s/%s.request",
+        self:screenCaptureRequestDirectory(),
+        tostring(token)
+    )
+
+end
+
+
+function obj:screenCaptureStatusPath(jobOrToken)
+
+    local token =
+        type(jobOrToken) == "table" and jobOrToken.token or jobOrToken
+
+    return string.format(
+        "%s/%s.status",
+        self:screenCaptureRequestDirectory(),
+        tostring(token)
+    )
+
+end
+
+
+function obj:readIgnoredBundlesFile()
+
+    local path =
+        self.ignoredBundlesFile or self:defaultIgnoredBundlesFile()
+
+
+    local ignored =
+        {}
+
+
+    for bundleID, enabled in pairs(self.excludedBundleIDs or {}) do
+
+        if enabled then
+
+            ignored[bundleID] =
+                true
+
+        end
+
+    end
+
+
+    if not path then
+
+        return ignored
+
+    end
+
+
+    local file =
+        io.open(path, "r")
+
+
+    if not file then
+
+        self:debug("Fichier ignore absent : " .. tostring(path))
+
+        return ignored
+
+    end
+
+
+    for line in file:lines() do
+
+        local bundleID =
+            trim(line:gsub("#.*$", ""))
+
+
+        if bundleID ~= "" then
+
+            ignored[bundleID] =
+                true
+
+        end
+
+    end
+
+
+    file:close()
+
+
+    return ignored
+
+end
+
+
+------------------------------------------------------------
+-- DESCRIPTEURS DE FENETRE
+--
+-- Interroger une fenetre coute cher : chaque win:application() est un
+-- aller-retour NSRunningApplication. L'ancienne version en faisait
+-- trois par fenetre rien que pour la filtrer (nom, bundle, masquage),
+-- puis trois de plus au moment de mettre une capture en file. On
+-- resout tout une seule fois et on transporte le resultat.
+------------------------------------------------------------
+
+function obj:beginDescriptorPass()
+
+    self.descriptorPass =
+        {}
+
+
+    return self
+
+end
+
+
+function obj:endDescriptorPass()
+
+    self.descriptorPass =
+        nil
+
+
+    return self
+
+end
+
+
+function obj:describeWindow(win)
+
+    if not win then
+
+        return nil
+
+    end
+
+
+    local id =
+        self:windowID(win)
+
+
+    if not id then
+
+        return nil
+
+    end
+
+
+    local pass =
+        self.descriptorPass
+
+
+    if pass then
+
+        local cached =
+            pass[id]
+
+
+        if cached and cached.window == win then
+
+            return cached
+
+        end
+
+    end
+
+
+    local application =
+        safeCall(function()
+
+            return win:application()
+
+        end)
+
+
+    local descriptor =
+        {
+            window = win,
+            id = id,
+            application = application,
+            appResolved = application ~= nil,
+        }
+
+
+    if application then
+
+        descriptor.bundleID =
+            safeCall(function()
+
+                return application:bundleID()
+
+            end)
+
+
+        descriptor.appName =
+            safeCall(function()
+
+                return application:name()
+
+            end)
+
+
+        descriptor.hidden =
+            safeCall(function()
+
+                return application:isHidden()
+
+            end) == true
+
+    end
+
+
+    descriptor.title =
+        safeCall(function()
+
+            return win:title()
+
+        end) or ""
+
+
+    descriptor.role =
+        safeCall(function()
+
+            return win:subrole()
+
+        end)
+
+
+    descriptor.frame =
+        safeCall(function()
+
+            return win:frame()
+
+        end)
+
+
+    descriptor.minimized =
+        safeCall(function()
+
+            return win:isMinimized()
+
+        end) == true
+
+
+    descriptor.displayTitle =
+        (descriptor.appName or "Application")
+
+
+    if descriptor.title ~= "" then
+
+        descriptor.displayTitle =
+            descriptor.displayTitle .. " - " .. descriptor.title
+
+    end
+
+
+    if pass then
+
+        pass[id] =
+            descriptor
+
+    end
+
+
+    return descriptor
+
+end
+
+
+
+------------------------------------------------------------
+-- ACCESSEURS FENETRE
+--
+-- Conserves pour compatibilite ; ils passent tous par le descripteur
+-- afin qu'un meme appel ne soit jamais paye deux fois dans une passe.
+------------------------------------------------------------
+
+function obj:windowApplication(win)
+
+    local descriptor =
+        self:describeWindow(win)
+
+
+    return descriptor and descriptor.application
+
+end
+
+
+function obj:windowBundleID(win)
+
+    local descriptor =
+        self:describeWindow(win)
+
+
+    return descriptor and descriptor.bundleID
+
+end
+
+
+function obj:windowAppName(win)
+
+    local descriptor =
+        self:describeWindow(win)
+
+
+    return descriptor and descriptor.appName
+
+end
+
+
+function obj:windowTitle(win)
+
+    local descriptor =
+        self:describeWindow(win)
+
+
+    return (descriptor and descriptor.title) or ""
+
+end
+
+
+function obj:windowRole(win)
+
+    local descriptor =
+        self:describeWindow(win)
+
+
+    return descriptor and descriptor.role
+
+end
+
+
+function obj:windowFrame(win)
+
+    local descriptor =
+        self:describeWindow(win)
+
+
+    return descriptor and descriptor.frame
+
+end
+
+
+function obj:isWindowMinimized(win)
+
+    local descriptor =
+        self:describeWindow(win)
+
+
+    return (descriptor and descriptor.minimized) == true
+
+end
+
+
+function obj:isWindowHidden(win)
+
+    local descriptor =
+        self:describeWindow(win)
+
+
+    return (descriptor and descriptor.hidden) == true
+
+end
+
+
+function obj:isDescriptorAllowed(descriptor)
+
+    if not descriptor then
+
+        return false
+
+    end
+
+
+    -- Une lecture qui echoue est un incident passager, pas une preuve
+    -- que la fenetre n'a pas sa place ici. L'ancienne version excluait
+    -- toute fenetre dont le nom d'application etait illisible : un
+    -- timeout AX suffisait a la rendre inatteignable au clavier pour
+    -- toute la session. Afficher une tuile en trop coute infiniment
+    -- moins cher que perdre une fenetre.
+
+    if descriptor.appResolved then
+
+        if descriptor.appName
+            and self.excludedAppNames[descriptor.appName] then
+
+            return false
+
+        end
+
+
+        if descriptor.bundleID
+            and self.loadedExcludedBundleIDs
+            and self.loadedExcludedBundleIDs[descriptor.bundleID] then
+
+            return false
+
+        end
+
+    end
+
+
+    if self.excludeEmptyTitles and descriptor.title == "" then
+
+        return false
+
+    end
+
+
+    if descriptor.role
+        and not self.allowedWindowRoles[descriptor.role] then
+
+        return false
+
+    end
+
+
+    local frame =
+        descriptor.frame
+
+
+    if frame then
+
+        if frame.w and frame.w < self.minWindowWidth then
+
+            return false
+
+        end
+
+
+        if frame.h and frame.h < self.minWindowHeight then
+
+            return false
+
+        end
+
+    end
+
+
+    if not self.includeMinimized and descriptor.minimized then
+
+        return false
+
+    end
+
+
+    if not self.includeHidden and descriptor.hidden then
+
+        return false
+
+    end
+
+
+    return true
+
+end
+
+
+function obj:isWindowAllowed(win)
+
+    return self:isDescriptorAllowed(
+        self:describeWindow(win)
+    )
+
+end
+
+
+
+------------------------------------------------------------
+-- FILTRE DE FENETRES
+--
+-- Le filtre est cree une fois et maintenu actif. L'ancienne version en
+-- construisait un neuf a chaque Alt+Tab : hs.window.filter monte alors
+-- un observateur AX sur chaque application et chaque fenetre de la
+-- machine (startGlobalWatcher), puis demonte tout au :pause() qui suit
+-- getWindows(). Ce cycle laissait derriere lui les timers de reessai
+-- de pendingApps, qui rappelaient app:focusedWindow() sur des
+-- applications entre-temps fermees : c'est la source des messages
+-- "LuaSkin: Unable to fetch NSRunningApplication for pid", repetes
+-- autant de fois qu'il y avait de reessais.
+------------------------------------------------------------
+
+function obj:ensureWindowFilter()
+
+    local spaceMode =
+        self.includeOtherSpaces and "all" or "current"
+
+
+    if self.windowFilterInstance
+        and self.windowFilterSpaceMode == spaceMode then
+
+        return self.windowFilterInstance
+
+    end
+
+
+    self:releaseWindowFilter()
+
+
+    local filter =
+        windowFilter.new(function(win)
+
+            return self:isWindowAllowed(win)
+
+        end)
+
+
+    if not filter then
+
+        return nil
+
+    end
+
+
+    if not self.includeOtherSpaces then
+
+        filter:setCurrentSpace(true)
+
+    end
+
+
+    -- Sans keepActive, getWindows() met le filtre en pause juste apres
+    -- l'avoir demarre, ce qui declenche le demontage complet decrit
+    -- plus haut.
+
+    if filter.keepActive then
+
+        safeCall(function()
+
+            filter:keepActive()
+
+        end)
+
+    end
+
+
+    self.windowFilterInstance =
+        filter
+
+
+    self.windowFilterSpaceMode =
+        spaceMode
+
+
+    return filter
+
+end
+
+
+function obj:releaseWindowFilter()
+
+    if self.windowFilterInstance then
+
+        safeCall(function()
+
+            self.windowFilterInstance:delete()
+
+        end)
+
+
+        self.windowFilterInstance =
+            nil
+
+
+        self.windowFilterSpaceMode =
+            nil
+
+    end
+
+
+    return self
+
+end
+
+
+-- window._orderedwinids() est un appel unique au WindowServer, sans
+-- accessibilite : c'est la meme primitive que celle qu'utilisent les
+-- switchers natifs pour connaitre l'ordre de profondeur. Les fenetres
+-- que seule la seconde passe trouve etaient jusqu'ici ajoutees dans
+-- l'ordre d'enumeration des applications, c'est-a-dire au hasard.
+
+function obj:orderedWindowRanks()
+
+    local ids =
+        safeCall(function()
+
+            return window._orderedwinids()
+
+        end)
+
+
+    if type(ids) ~= "table" then
+
+        return nil
+
+    end
+
+
+    local ranks =
+        {}
+
+
+    for rank, id in ipairs(ids) do
+
+        if ranks[id] == nil then
+
+            ranks[id] =
+                rank
+
+        end
+
+    end
+
+
+    return ranks
+
+end
+
+
+function obj:collectWindows()
+
+    self:refreshIgnoredBundles()
+    self:beginDescriptorPass()
+
+
+    local collected =
+        {}
+
+
+    local seen =
+        {}
+
+
+    local function addWindows(windows)
+
+        for _, win in ipairs(windows or {}) do
+
+            local descriptor =
+                self:describeWindow(win)
+
+
+            if descriptor
+                and not seen[descriptor.id]
+                and self:isDescriptorAllowed(descriptor) then
+
+                seen[descriptor.id] =
+                    true
+
+
+                table.insert(collected, descriptor)
+
+            end
+
+        end
+
+    end
+
+
+    local filter =
+        self:ensureWindowFilter()
+
+
+    if filter then
+
+        addWindows(
+            safeCall(function()
+
+                return filter:getWindows(
+                    windowFilter.sortByFocusedLast
+                )
+
+            end)
+        )
+
+    end
+
+
+    -- Les fenetres trouvees seulement ici arrivent apres celles du
+    -- filtre, donc hors ordre MRU : c'est le prix de l'exhaustivite.
+
+    if self.completeWithAllWindows then
+
+        local firstPassCount =
+            #collected
+
+
+        addWindows(
+            safeCall(function()
+
+                return window.allWindows()
+
+            end)
+        )
+
+
+        self:sortTail(collected, firstPassCount)
+
+    end
+
+
+    self:endDescriptorPass()
+
+
+    return collected
+
+end
+
+
+
+-- Range les elements ajoutes apres firstPassCount par ordre de
+-- profondeur, en preservant l'ordre MRU des precedents.
+
+function obj:sortTail(collected, firstPassCount)
+
+    if #collected <= firstPassCount + 1 then
+
+        return collected
+
+    end
+
+
+    local ranks =
+        self:orderedWindowRanks()
+
+
+    if not ranks then
+
+        return collected
+
+    end
+
+
+    local tail =
+        {}
+
+
+    for index = firstPassCount + 1, #collected do
+
+        table.insert(
+            tail,
+            {
+                descriptor = collected[index],
+                rank = ranks[collected[index].id] or math.huge,
+                order = index,
+            }
+        )
+
+    end
+
+
+    table.sort(
+        tail,
+        function(left, right)
+
+            if left.rank ~= right.rank then
+
+                return left.rank < right.rank
+
+            end
+
+
+            return left.order < right.order
+
+        end
+    )
+
+
+    for offset, item in ipairs(tail) do
+
+        collected[firstPassCount + offset] =
+            item.descriptor
+
+    end
+
+
+    return collected
+
+end
+
+
+function obj:windowID(win)
+
+    return safeCall(function()
+
+        return win:id()
+
+    end)
+
+end
+
+
+function obj:trimSnapshotCache()
+
+    local now =
+        timer.secondsSinceEpoch()
+
+
+    local kept =
+        {}
+
+
+    local count =
+        0
+
+
+    for id, entry in pairs(self.snapshotCache) do
+
+        if entry.time
+            and now - entry.time <= self.snapshotCacheMaxAgeSeconds then
+
+            kept[#kept + 1] =
+                {
+                    id = id,
+                    time = entry.time,
+                }
+
+
+            count =
+                count + 1
+
+        else
+
+            self.snapshotCache[id] =
+                nil
+
+
+            self:discardCaptureFile(id)
+
+        end
+
+    end
+
+
+    if count <= self.snapshotCacheMaxEntries then
+
+        return self
+
+    end
+
+
+    table.sort(
+        kept,
+        function(left, right)
+
+            return left.time < right.time
+
+        end
+    )
+
+
+    for index = 1, count - self.snapshotCacheMaxEntries do
+
+        self.snapshotCache[kept[index].id] =
+            nil
+
+
+        self:discardCaptureFile(kept[index].id)
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:clearSnapshotCache()
+
+    for id in pairs(self.snapshotCache) do
+
+        self:discardCaptureFile(id)
+
+    end
+
+
+    self.snapshotCache =
+        {}
+
+
+    self.screenCaptureFailureCache =
+        {}
+
+
+    return self
+
+end
+
+
+-- Le cache ne connaissait aucune eviction : une fenetre fermee laissait
+-- sa capture en memoire jusqu'au rechargement de Hammerspoon, et le PNG
+-- correspondant restait dans /tmp jusqu'au lendemain.
+
+-- Le fichier etait relu integralement a chaque Alt+Tab. On ne le relit
+-- que si sa date de modification a change.
+
+function obj:refreshIgnoredBundles(force)
+
+    local path =
+        self.ignoredBundlesFile or self:defaultIgnoredBundlesFile()
+
+
+    local signature =
+        "absent"
+
+
+    if path then
+
+        local modified =
+            fs.attributes(path, "modification")
+
+
+        signature =
+            tostring(path) .. ":" .. tostring(modified or "absent")
+
+    end
+
+
+    if not force
+        and self.loadedExcludedBundleIDs
+        and self.ignoredBundlesSignature == signature then
+
+        return self.loadedExcludedBundleIDs
+
+    end
+
+
+    self.loadedExcludedBundleIDs =
+        self:readIgnoredBundlesFile()
+
+
+    self.ignoredBundlesSignature =
+        signature
+
+
+    return self.loadedExcludedBundleIDs
+
+end
+
+
+function obj:windowSnapshot(descriptor)
+
+    if not descriptor then
+
+        return nil
+
+    end
+
+
+    local id =
+        descriptor.id
+
+
+    local now =
+        timer.secondsSinceEpoch()
+
+
+    local cached =
+        self.snapshotCache[id]
+
+
+    if cached and cached.time + self.snapshotCacheSeconds > now then
+
+        return cached.image
+
+    end
+
+
+    -- Une fenetre visible se capture instantanement par le
+    -- WindowServer ; inutile de deranger le helper pour elle.
+
+    if self.instantVisibleSnapshots
+        and not descriptor.minimized
+        and not descriptor.hidden then
+
+        local snapshot =
+            safeCall(function()
+
+                return window.snapshotForID(id)
+
+            end)
+
+
+        if snapshot then
+
+            self.snapshotCache[id] =
+                {
+                    image = snapshot,
+                    time = now,
+                }
+
+
+            return snapshot
+
+        end
+
+    end
+
+
+    self:queueScreenCapture(descriptor)
+
+
+    return cached and cached.image or nil
+
+end
+
+
+
+function obj:screenCaptureOutputPath(jobOrID, token)
+
+    local id =
+        type(jobOrID) == "table" and jobOrID.id or jobOrID
+
+
+    local captureToken =
+        type(jobOrID) == "table" and jobOrID.token or token
+
+    return string.format(
+        "%s/%s-%s.png",
+        self:screenCaptureCaptureDirectory(),
+        tostring(id),
+        tostring(captureToken or "capture")
+    )
+
+end
+
+
+function obj:readSmallFile(path)
+
+    local file =
+        io.open(path, "r")
+
+
+    if not file then
+
+        return nil
+
+    end
+
+
+    local content =
+        file:read("*a")
+
+
+    file:close()
+
+
+    return content
+
+end
+
+
+function obj:removeFile(path)
+
+    if path and fs.attributes(path) then
+
+        safeCall(function()
+
+            os.remove(path)
+
+        end)
+
+    end
+
+end
+
+
+function obj:chmod(path, mode)
+
+    if not path or not mode then
+
+        return false
+
+    end
+
+
+    local ok =
+        os.execute(
+            string.format(
+                "/bin/chmod %s %s",
+                shellQuote(mode),
+                shellQuote(path)
+            )
+        )
+
+
+    return ok == true or ok == 0
+
+end
+
+
+function obj:ensureDirectory(path, mode)
+
+    if not fs.attributes(path) then
+
+        safeCall(function()
+
+            fs.mkdir(path)
+
+        end)
+
+    end
+
+
+    if mode then
+
+        self:chmod(path, mode)
+
+    end
+
+
+    return fs.attributes(path) ~= nil
+
+end
+
+
+function obj:writePrivateFile(path, content)
+
+    local tmpPath =
+        path .. ".tmp." .. readRandomHex(8)
+
+
+    local file =
+        io.open(tmpPath, "w")
+
+
+    if not file then
+
+        return false
+
+    end
+
+
+    file:write(tostring(content or ""))
+    file:close()
+    self:chmod(tmpPath, "600")
+
+
+    local ok =
+        os.rename(tmpPath, path)
+
+
+    if not ok then
+
+        self:removeFile(tmpPath)
+
+        return false
+
+    end
+
+
+    self:chmod(path, "600")
+
+
+    return true
+
+end
+
+
+function obj:createScreenCaptureSession()
+
+    if self.screenCaptureSessionDirectory
+        and self.screenCaptureSessionSecret then
+
+        return true
+
+    end
+
+
+    self.screenCaptureSessionID =
+        self.screenCaptureSessionPrefix .. readRandomHex(16)
+
+
+    self.screenCaptureSessionSecret =
+        readRandomHex(32)
+
+
+    self.screenCaptureSessionDirectory =
+        self.screenCaptureSessionBaseDirectory
+            .. "/"
+            .. self.screenCaptureSessionID
+
+
+    if not self:ensureDirectory(self.screenCaptureSessionBaseDirectory, "700")
+        or not self:ensureDirectory(self.screenCaptureSessionDirectory, "700")
+        or not self:ensureDirectory(self:screenCaptureRequestDirectory(), "700")
+        or not self:ensureDirectory(self:screenCaptureCaptureDirectory(), "700") then
+
+        return false
+
+    end
+
+
+    return self:writePrivateFile(
+        self:screenCaptureSecretPath(),
+        self.screenCaptureSessionSecret
+    )
+
+end
+
+
+function obj:removeSessionDirectory(path)
+
+    if not path or not fs.attributes(path) then
+
+        return self
+
+    end
+
+
+    -- hs.task plutot que hs.execute : pas de shell, donc pas de
+    -- .zshrc a interpreter, et rien qui bloque le thread principal.
+
+    local removal =
+        task.new(
+            "/bin/rm",
+            nil,
+            {
+                "-rf",
+                path,
+            }
+        )
+
+
+    if removal then
+
+        removal:start()
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:removeScreenCaptureSession()
+
+    self:removeSessionDirectory(self.screenCaptureSessionDirectory)
+
+
+    self.screenCaptureSessionID =
+        nil
+
+
+    self.screenCaptureSessionSecret =
+        nil
+
+
+    self.screenCaptureSessionDirectory =
+        nil
+
+
+    return self
+
+end
+
+
+function obj:cleanupScreenCaptureSessions()
+
+    local baseDir =
+        self.screenCaptureSessionBaseDirectory
+
+
+    if not fs.attributes(baseDir) then
+
+        return self
+
+    end
+
+
+    local iterator,
+          directory =
+        fs.dir(baseDir)
+
+
+    if not iterator or not directory then
+
+        return self
+
+    end
+
+
+    -- Toute session qui n'est pas la notre appartient a une instance
+    -- de Hammerspoon qui n'existe plus, et les helpers survivants ont
+    -- deja ete arretes juste avant. L'ancien delai de 24 h laissait
+    -- s'empiler un repertoire par rechargement.
+
+    for entry in iterator, directory do
+
+        if entry
+            and entry:sub(1, #self.screenCaptureSessionPrefix) == self.screenCaptureSessionPrefix
+            and entry ~= self.screenCaptureSessionID then
+
+            self:removeSessionDirectory(
+                baseDir .. "/" .. entry
+            )
+
+        end
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:writeScreenCaptureRequest(job)
+
+    if not self:createScreenCaptureSession() then
+
+        return false
+
+    end
+
+
+    self:removeFile(job.outputPath)
+    self:removeFile(self:screenCaptureStatusPath(job))
+
+
+    local payload =
+        table.concat(
+            {
+                "3",
+                tostring(job.token),
+                tostring(job.id),
+                tostring(job.outputPath),
+                tostring(job.pixelHeight),
+                tostring(job.appName or "Application"):gsub("[\r\n]", " "),
+                tostring(job.title or ""):gsub("[\r\n]", " "),
+                tostring(self.screenCaptureSessionSecret),
+            },
+            "\n"
+        ) .. "\n"
+
+
+    return self:writePrivateFile(
+        self:screenCaptureRequestPath(job),
+        payload
+    )
+
+end
+
+
+function obj:readScreenCaptureStatus(job)
+
+    local status =
+        self:readSmallFile(self:screenCaptureStatusPath(job))
+
+
+    if not status then
+
+        return nil
+
+    end
+
+
+    local lines =
+        splitLines(status, 5)
+
+
+    if lines[1] ~= "3"
+        or lines[2] ~= tostring(job.token)
+        or not lines[3]
+        or not lines[5] then
+
+        return "error", "statut capture invalide"
+
+    end
+
+
+    if lines[5] ~= tostring(self.screenCaptureSessionSecret) then
+
+        return "error", "jeton statut capture invalide"
+
+    end
+
+
+    return lines[3], lines[4] or ""
+
+end
+
+
+function obj:screenCaptureHelperIsRunning()
+
+    local applications =
+        safeCall(function()
+
+            return hs.application.applicationsForBundleID(
+                self.screenCaptureHelperBundleID
+            )
+
+        end)
+
+
+    return type(applications) == "table"
+        and #applications > 0
+
+end
+
+
+function obj:stopScreenCaptureHelperApp()
+
+    local applications =
+        safeCall(function()
+
+            return hs.application.applicationsForBundleID(
+                self.screenCaptureHelperBundleID
+            )
+
+        end)
+
+
+    for _, application in ipairs(applications or {}) do
+
+        safeCall(function()
+
+            application:kill()
+
+        end)
+
+    end
+
+
+    self.screenCaptureHelperAppStarted =
+        false
+
+
+    return self
+
+end
+
+
+-- Le helper se termine de lui-meme apres 30 s sans requete
+-- (idleQuitDelay, cote Swift). L'ancienne version laissait
+-- screenCaptureHelperAppStarted a true indefiniment : passe ce delai,
+-- chaque requete etait ecrite pour un processus mort, et les vignettes
+-- des fenetres reduites ne revenaient plus jamais jusqu'au rechargement.
+
+function obj:startScreenCaptureHelperApp()
+
+    if self.screenCaptureHelperAppStarted
+        and self:screenCaptureHelperIsRunning() then
+
+        return true
+
+    end
+
+
+    self.screenCaptureHelperAppStarted =
+        false
+
+
+    local appPath =
+        self.screenCaptureHelperAppPath or self:defaultScreenCaptureHelperAppPath()
+
+
+    if not self:createScreenCaptureSession() then
+
+        return false
+
+    end
+
+
+    if not appPath or not fs.attributes(appPath) then
+
+        return false
+
+    end
+
+
+    local launchTask =
+        task.new(
+            "/usr/bin/open",
+            nil,
+            {
+                "-gj",
+                "-n",
+                appPath,
+                "--args",
+                "--service",
+                self.screenCaptureSessionDirectory,
+            }
+        )
+
+
+    if not launchTask or not launchTask:start() then
+
+        return false
+
+    end
+
+
+    self.screenCaptureHelperAppStarted =
+        true
+
+
+    return true
+
+end
+
+
+function obj:startScreenCapturePollTimer()
+
+    if self.screenCapturePollTimer then
+
+        return self
+
+    end
+
+
+    self.screenCapturePollTimer =
+        timer.doEvery(
+            self.screenCapturePollIntervalSeconds,
+            function()
+
+                self:pollScreenCaptureRequests()
+
+            end
+        )
+
+
+    return self
+
+end
+
+
+function obj:stopScreenCapturePollTimerIfIdle()
+
+    if self.screenCapturePollTimer
+        and self:countRunningScreenCaptures() == 0 then
+
+        self.screenCapturePollTimer:stop()
+
+        self.screenCapturePollTimer =
+            nil
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:countRunningScreenCaptures()
+
+    local count =
+        0
+
+
+    for _, _task in pairs(self.runningScreenCaptures or {}) do
+
+        count =
+            count + 1
+
+    end
+
+
+    return count
+
+end
+
+
+function obj:discardCaptureFile(id)
+
+    local path =
+        self.captureFiles[id]
+
+
+    if path then
+
+        self.captureFiles[id] =
+            nil
+
+
+        self:removeFile(path)
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:finishScreenCaptureJob(job, capturedImage, errorMessage)
+
+    self.runningScreenCaptures[job.id] =
+        nil
+
+
+    if capturedImage then
+
+        -- Chaque capture recoit un jeton neuf, donc un fichier neuf :
+        -- sans cette ligne, un PNG s'accumulait dans /tmp a chaque
+        -- rafraichissement de vignette, pour toute la session.
+
+        self:discardCaptureFile(job.id)
+
+
+        self.captureFiles[job.id] =
+            job.outputPath
+
+
+        self.snapshotCache[job.id] =
+            {
+                image = capturedImage,
+                time = timer.secondsSinceEpoch(),
+            }
+
+
+        self.screenCaptureFailureCache[job.id] =
+            nil
+
+
+        self:trimSnapshotCache()
+
+
+        if self.entries then
+
+            self:scheduleRedraw()
+
+        end
+
+
+        return self
+
+    end
+
+
+    self:removeFile(job.outputPath)
+
+
+    self.screenCaptureFailureCache[job.id] =
+        timer.secondsSinceEpoch()
+
+
+    local messageText =
+        tostring(errorMessage or "")
+
+
+    if self.disableScreenCaptureHelperAfterCGSAssertion
+        and messageText:find("CGS_REQUIRE_INIT", 1, true) then
+
+        self.screenCaptureDisabledReason =
+            "CGS_REQUIRE_INIT"
+
+
+        self.screenCaptureQueue =
+            {}
+
+
+        self.queuedScreenCaptures =
+            {}
+
+    end
+
+    if messageText:find("TCC", 1, true)
+        or messageText:lower():find("refus", 1, true)
+        or messageText:lower():find("denied", 1, true) then
+
+        self.screenCaptureDisabledReason =
+            "autorisation capture ecran manquante pour WindowSwitcherCapture"
+
+
+        self.screenCaptureQueue =
+            {}
+
+
+        self.queuedScreenCaptures =
+            {}
+
+    end
+
+
+    local message =
+        string.format(
+            "Capture impossible pour %s - %s [%s%s] : %s%s",
+            tostring(job.appName),
+            tostring(job.title or ""),
+            job.isMinimized and "reduite" or "visible",
+            job.isHidden and ", cachee" or "",
+            messageText,
+            self.screenCaptureDisabledReason and " (helper desactive jusqu'au reload)" or ""
+        )
+
+
+    if self.logScreenCaptureFailures or job.isMinimized or job.isHidden then
+
+        self:log(message)
+
+    else
+
+        self:debug(message)
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:pollScreenCaptureRequests()
+
+    local now =
+        timer.secondsSinceEpoch()
+
+
+    for id, running in pairs(self.runningScreenCaptures or {}) do
+
+        local job =
+            running.job or running
+
+
+        local statusPath =
+            self:screenCaptureStatusPath(job)
+
+
+        if fs.attributes(statusPath) then
+
+            local state,
+                  statusMessage =
+                self:readScreenCaptureStatus(job)
+
+
+            self:removeFile(statusPath)
+
+
+            if state == "ok" and fs.attributes(job.outputPath) then
+
+                local capturedImage =
+                    image.imageFromPath(job.outputPath)
+
+
+                self:finishScreenCaptureJob(
+                    job,
+                    capturedImage,
+                    capturedImage and nil or "image illisible"
+                )
+
+            else
+
+                self:finishScreenCaptureJob(job, nil, statusMessage or "capture failed")
+
+            end
+
+        else
+
+            if running.startedAt
+                and running.startedAt + self.screenCaptureRequestTimeoutSeconds < now then
+
+                self:removeFile(self:screenCaptureRequestPath(job))
+                self:removeFile(statusPath)
+
+
+                -- Un depassement signifie presque toujours que le
+                -- service s'est arrete. On le note pour que la
+                -- prochaine capture le relance au lieu d'ecrire dans
+                -- le vide indefiniment.
+
+                self.screenCaptureHelperAppStarted =
+                    false
+
+
+                self:finishScreenCaptureJob(job, nil, "capture timed out")
+
+            end
+
+        end
+
+    end
+
+
+    self:stopScreenCapturePollTimerIfIdle()
+    self:drainScreenCaptureQueue()
+
+
+    return self
+
+end
+
+
+function obj:queueScreenCapture(descriptor)
+
+    if not self.screenCaptureHelperEnabled then
+
+        return self
+
+    end
+
+    if self.screenCaptureDisabledReason then
+
+        return self
+
+    end
+
+
+    if not descriptor then
+
+        return self
+
+    end
+
+
+    local id =
+        descriptor.id
+
+
+    if self.queuedScreenCaptures[id]
+        or self.runningScreenCaptures[id] then
+
+        return self
+
+    end
+
+
+    local now =
+        timer.secondsSinceEpoch()
+
+
+    local failedAt =
+        self.screenCaptureFailureCache[id]
+
+
+    if failedAt
+        and failedAt + self.screenCaptureFailureBackoffSeconds > now then
+
+        return self
+
+    end
+
+
+    local helper =
+        self.screenCaptureHelperPath or self:defaultScreenCaptureHelperPath()
+
+
+    if not helper or not fs.attributes(helper) then
+
+        self:debug("Helper ScreenCaptureKit absent")
+
+        return self
+
+    end
+
+
+    if not self:createScreenCaptureSession() then
+
+        return self
+
+    end
+
+
+    self.queuedScreenCaptures[id] =
+        true
+
+
+    -- Tout vient du descripteur : l'ancienne version relisait ici le
+    -- nom de l'application, le titre, l'etat reduit et l'etat masque,
+    -- soit trois resolutions NSRunningApplication de plus par capture.
+
+    local job =
+        {
+            id = id,
+            token = readRandomHex(16),
+            pixelHeight = tostring(math.floor(self.screenCapturePixelHeight)),
+            appName = descriptor.appName or "Application",
+            title = descriptor.title or "",
+            isMinimized = descriptor.minimized,
+            isHidden = descriptor.hidden,
+        }
+
+
+    job.outputPath =
+        self:screenCaptureOutputPath(job)
+
+
+    table.insert(
+        self.screenCaptureQueue,
+        job
+    )
+
+
+    self:drainScreenCaptureQueue()
+
+
+    return self
+
+end
+
+
+function obj:drainScreenCaptureQueue()
+
+    while #self.screenCaptureQueue > 0
+        and self:countRunningScreenCaptures() < self.maxConcurrentScreenCaptures do
+
+        local job =
+            table.remove(self.screenCaptureQueue, 1)
+
+
+        self.queuedScreenCaptures[job.id] =
+            nil
+
+
+        if self:startScreenCaptureHelperApp()
+            and self:writeScreenCaptureRequest(job) then
+
+            self.runningScreenCaptures[job.id] =
+                {
+                    job = job,
+                    startedAt = timer.secondsSinceEpoch(),
+                }
+
+
+            self:startScreenCapturePollTimer()
+
+        else
+
+            self:finishScreenCaptureJob(job, nil, "service capture indisponible")
+
+        end
+
+    end
+
+
+    return self
+
+end
+
+
+
+function obj:previewImage(descriptor)
+
+    local snapshot =
+        self:windowSnapshot(descriptor)
+
+
+    if snapshot then
+
+        return snapshot, false
+
+    end
+
+
+    return self:appIcon(descriptor), true
+
+end
+
+
+function obj:appIcon(descriptor)
+
+    local bundleID =
+        descriptor and descriptor.bundleID
+
+
+    if not bundleID then
+
+        return image.imageFromName("NSApplicationIcon")
+
+    end
+
+
+    if not self.iconCache[bundleID] then
+
+        self.iconCache[bundleID] =
+            image.imageFromAppBundle(bundleID)
+            or image.imageFromName("NSApplicationIcon")
+
+    end
+
+
+    return self.iconCache[bundleID]
+
+end
+
+
+function obj:displayTitle(descriptor)
+
+    return (descriptor and descriptor.displayTitle) or "Application"
+
+end
+
+
+-- styledtext.new construit une NSAttributedString a chaque appel. Sans
+-- ce cache, une grille de douze tuiles en refaisait douze a chaque
+-- rendu, et un rendu a lieu a chaque appui sur Tab comme a chaque
+-- capture qui arrive.
+
+function obj:styledTitle(descriptor, isSelected)
+
+    local title =
+        self:displayTitle(descriptor)
+
+
+    local cacheKey =
+        tostring(descriptor and descriptor.id)
+        .. (isSelected and ":1" or ":0")
+
+
+    local cached =
+        self.titleCache[cacheKey]
+
+
+    if cached then
+
+        return cached
+
+    end
+
+
+    local styled =
+        safeCall(function()
+
+            return styledtext.new(
+                title,
+                {
+                    font = {
+                        name = ".AppleSystemUIFont",
+                        size = isSelected and self.textSize + 1 or self.textSize,
+                    },
+                    color = self:themeColor("labelTextColor"),
+                    paragraphStyle = {
+                        lineBreak = "truncateTail",
+                    },
+                }
+            )
+
+        end) or title
+
+
+    self.titleCache[cacheKey] =
+        styled
+
+
+    return styled
+
+end
+
+
+
+function obj:modifiersPressed()
+
+    local modifiers =
+        eventtap.checkKeyboardModifiers(true)
+
+
+    return modifiers and modifiers._raw and modifiers._raw > 0 and modifiers._raw ~= 65536
+
+end
+
+
+
+------------------------------------------------------------
+-- LAYOUT
+------------------------------------------------------------
+
+function obj:visibleRange(total, pageSize)
+
+    if total <= pageSize then
+
+        return 1, total
+
+    end
+
+
+    local page =
+        math.floor((self.selectedIndex - 1) / pageSize)
+
+
+    local startIndex =
+        page * pageSize + 1
+
+
+    local endIndex =
+        math.min(total, startIndex + pageSize - 1)
+
+
+    return startIndex, endIndex
+
+end
+
+
+function obj:estimatedLabelWidth(descriptor)
+
+    if descriptor and descriptor.labelWidth then
+
+        return descriptor.labelWidth
+
+    end
+
+
+    local title =
+        self:displayTitle(descriptor)
+
+
+    -- #title compte les octets : "Preferences Systeme" accentue etait
+    -- surevalue de deux caracteres a chaque accent.
+
+    local length =
+        (utf8 and utf8.len and utf8.len(title)) or #title
+
+
+    local estimated =
+        self.iconSize + 10 + (length * self.textSize * 0.52)
+
+
+    if estimated < self.labelMinWidth then
+
+        estimated =
+            self.labelMinWidth
+
+    elseif estimated > self.labelMaxWidth then
+
+        estimated =
+            self.labelMaxWidth
+
+    end
+
+
+    estimated =
+        math.floor(estimated)
+
+
+    if descriptor then
+
+        descriptor.labelWidth =
+            estimated
+
+    end
+
+
+    return estimated
+
+end
+
+
+function obj:previewSize(descriptor, maxWidth, maxHeight)
+
+    local frame =
+        descriptor and descriptor.frame
+
+
+    local aspect =
+        16 / 10
+
+
+    if frame and frame.w and frame.h and frame.w > 1 and frame.h > 1 then
+
+        aspect =
+            frame.w / frame.h
+
+    end
+
+
+    local width =
+        maxWidth
+
+
+    local height =
+        width / aspect
+
+
+    if height > maxHeight then
+
+        height =
+            maxHeight
+
+        width =
+            height * aspect
+
+    end
+
+
+    if width < self.previewMinWidth then
+
+        width =
+            self.previewMinWidth
+
+    end
+
+
+    if height < self.previewMinHeight then
+
+        height =
+            self.previewMinHeight
+
+    end
+
+
+    return math.floor(width), math.floor(height)
+
+end
+
+
+function obj:layout(startIndex, endIndex)
+
+    local screenFrame =
+        screen.mainScreen():frame()
+
+
+    local totalVisible =
+        endIndex - startIndex + 1
+
+
+    local availablePanelWidth =
+        math.max(
+            260,
+            screenFrame.w - (self.screenMargin * 2)
+        )
+
+
+    local availablePanelHeight =
+        math.max(
+            180,
+            screenFrame.h - (self.screenMargin * 2)
+        )
+
+
+    local maxPanelWidth =
+        math.min(
+            math.floor(screenFrame.w * self.maxPanelWidthRatio),
+            math.floor(availablePanelWidth)
+        )
+
+
+    local maxPanelHeight =
+        math.min(
+            math.floor(screenFrame.h * self.maxPanelHeightRatio),
+            math.floor(availablePanelHeight)
+        )
+
+
+    local maxContentWidth =
+        maxPanelWidth - (self.panelPadding * 2)
+
+
+    local maxContentHeight =
+        maxPanelHeight - (self.panelPadding * 2)
+
+
+    local columns =
+        math.min(
+            math.max(1, self.maxColumns),
+            math.max(1, totalVisible)
+        )
+
+
+    while columns > 1
+        and (columns * math.max(self.previewMinWidth, self.labelMinWidth))
+            + ((columns - 1) * self.columnGap) > maxContentWidth do
+
+        columns =
+            columns - 1
+
+    end
+
+
+    local rows =
+        math.ceil(totalVisible / columns)
+
+
+    local maxPreviewWidth =
+        math.min(
+            self.previewMaxWidth,
+            math.floor((maxContentWidth - (columns - 1) * self.columnGap) / columns)
+        )
+
+
+    if maxPreviewWidth < self.previewMinWidth then
+
+        maxPreviewWidth =
+            self.previewMinWidth
+
+    end
+
+
+    local maxPreviewHeight =
+        math.min(
+            self.previewMaxHeight,
+            math.floor((maxContentHeight - (rows - 1) * self.rowGap) / rows) - self.labelHeight - self.labelToPreviewGap
+        )
+
+
+    if maxPreviewHeight < self.previewMinHeight then
+
+        maxPreviewHeight =
+            self.previewMinHeight
+
+    end
+
+
+    local items =
+        {}
+
+
+    local rowWidths =
+        {}
+
+
+    local rowHeights =
+        {}
+
+
+    local slot =
+        1
+
+
+    for index = startIndex, endIndex do
+
+        local row =
+            math.floor((slot - 1) / columns) + 1
+
+
+        local previewWidth,
+              previewHeight =
+            self:previewSize(
+                self.entries[index],
+                maxPreviewWidth,
+                maxPreviewHeight
+            )
+
+
+        local labelWidth =
+            math.min(
+                self:estimatedLabelWidth(self.entries[index]),
+                maxPreviewWidth
+            )
+
+
+        local itemWidth =
+            math.max(previewWidth, labelWidth)
+
+
+        local itemHeight =
+            self.labelHeight + self.labelToPreviewGap + previewHeight
+
+
+        table.insert(
+            items,
+            {
+                index = index,
+                entry = self.entries[index],
+                row = row,
+                width = itemWidth,
+                height = itemHeight,
+                previewWidth = previewWidth,
+                previewHeight = previewHeight,
+                labelWidth = labelWidth,
+            }
+        )
+
+
+        rowWidths[row] =
+            (rowWidths[row] or 0) + itemWidth
+
+
+        if slot % columns ~= 1 then
+
+            rowWidths[row] =
+                rowWidths[row] + self.columnGap
+
+        end
+
+
+        rowHeights[row] =
+            math.max(rowHeights[row] or 0, itemHeight)
+
+
+        slot =
+            slot + 1
+
+    end
+
+
+    local contentWidth =
+        0
+
+
+    local contentHeight =
+        0
+
+
+    for row = 1, rows do
+
+        contentWidth =
+            math.max(contentWidth, rowWidths[row] or 0)
+
+
+        contentHeight =
+            contentHeight + (rowHeights[row] or 0)
+
+
+        if row > 1 then
+
+            contentHeight =
+                contentHeight + self.rowGap
+
+        end
+
+    end
+
+
+    local panelWidth =
+        math.min(
+            maxPanelWidth,
+            math.max(self.minPanelWidth, contentWidth + self.panelPadding * 2)
+        )
+
+
+    local panelHeight =
+        math.min(
+            maxPanelHeight,
+            math.max(self.minPanelHeight, contentHeight + self.panelPadding * 2)
+        )
+
+
+    local centeredX =
+        math.floor(screenFrame.x + (screenFrame.w - panelWidth) / 2)
+
+
+    local centeredY =
+        math.floor(screenFrame.y + (screenFrame.h - panelHeight) / 2)
+
+
+    local panelX =
+        math.max(
+            screenFrame.x + self.screenMargin,
+            math.min(
+                centeredX,
+                screenFrame.x + screenFrame.w - self.screenMargin - panelWidth
+            )
+        )
+
+
+    local panelY =
+        math.max(
+            screenFrame.y + self.screenMargin,
+            math.min(
+                centeredY,
+                screenFrame.y + screenFrame.h - self.screenMargin - panelHeight
+            )
+        )
+
+
+    local y =
+        math.floor((panelHeight - contentHeight) / 2)
+
+
+    for row = 1, rows do
+
+        local x =
+            math.floor((panelWidth - (rowWidths[row] or 0)) / 2)
+
+
+        for _, item in ipairs(items) do
+
+            if item.row == row then
+
+                item.x =
+                    x
+
+
+                item.y =
+                    y
+
+
+                x =
+                    x + item.width + self.columnGap
+
+            end
+
+        end
+
+
+        y =
+            y + (rowHeights[row] or 0) + self.rowGap
+
+    end
+
+
+    return {
+        canvas = {
+            x = panelX - self.canvasPadding,
+            y = panelY - self.canvasPadding,
+            w = panelWidth + (self.canvasPadding * 2),
+            h = panelHeight + (self.canvasPadding * 2),
+        },
+        panel = {
+            x = self.canvasPadding,
+            y = self.canvasPadding,
+            w = panelWidth,
+            h = panelHeight,
+        },
+        items = items,
+    }
+
+end
+
+
+
+------------------------------------------------------------
+-- RENDU CANVAS
+------------------------------------------------------------
+
+function obj:panelElement(layout)
+
+    return {
+        type = "rectangle",
+        action = "strokeAndFill",
+        frame = {
+            x = layout.panel.x,
+            y = layout.panel.y,
+            w = layout.panel.w,
+            h = layout.panel.h,
+        },
+        roundedRectRadii = rounded(self.panelCornerRadius),
+        fillColor = self:themeColor("backgroundColor"),
+        strokeColor = self:themeColor("panelStrokeColor"),
+        strokeWidth = 1,
+        withShadow = true,
+        shadow = {
+            blurRadius = 18,
+            color = self:themeColor("shadowColor"),
+            offset = {
+                h = -10,
+                w = 0,
+            },
+        },
+    }
+
+end
+
+
+function obj:tileElements(elements, item, offsetX, offsetY)
+
+    offsetX =
+        offsetX or 0
+
+
+    offsetY =
+        offsetY or 0
+
+    local isSelected =
+        item.index == self.selectedIndex
+
+
+    local alpha =
+        isSelected and self.selectedAlpha or self.unselectedAlpha
+
+
+    local entry =
+        item.entry
+
+
+    local preview,
+          isPlaceholder =
+        self:previewImage(entry)
+
+    local placeholderSize =
+        math.floor(self.iconSize * self.placeholderIconScale)
+
+
+    local labelX =
+        offsetX + item.x + math.floor((item.width - item.labelWidth) / 2)
+
+
+    local labelY =
+        offsetY + item.y
+
+
+    local thumbFrame =
+        {
+            x = offsetX + item.x + math.floor((item.width - item.previewWidth) / 2),
+            y = offsetY + item.y + self.labelHeight + self.labelToPreviewGap,
+            w = item.previewWidth,
+            h = item.previewHeight,
+        }
+
+
+    if isPlaceholder then
+
+        table.insert(
+            elements,
+            {
+                type = "rectangle",
+                action = "fill",
+                frame = thumbFrame,
+                roundedRectRadii = rounded(self.tileCornerRadius),
+                fillColor = self:themeColor("thumbnailBackgroundColor"),
+            }
+        )
+
+    end
+
+
+    if not isPlaceholder then
+
+        table.insert(
+            elements,
+            {
+                type = "rectangle",
+                action = "clip",
+                frame = thumbFrame,
+                roundedRectRadii = rounded(self.tileCornerRadius),
+            }
+        )
+
+    end
+
+
+    table.insert(
+        elements,
+        {
+            type = "image",
+            frame = isPlaceholder and {
+                x = thumbFrame.x + math.floor((thumbFrame.w - placeholderSize) / 2),
+                y = thumbFrame.y + math.floor((thumbFrame.h - placeholderSize) / 2),
+                w = placeholderSize,
+                h = placeholderSize,
+            } or thumbFrame,
+            image = preview,
+            imageScaling = "scaleProportionally",
+            imageAlpha = alpha,
+        }
+    )
+
+
+    if not isPlaceholder then
+
+        table.insert(
+            elements,
+            {
+                type = "resetClip",
+            }
+        )
+
+    end
+
+
+    table.insert(
+        elements,
+        {
+            type = "rectangle",
+            action = "stroke",
+            frame = thumbFrame,
+            roundedRectRadii = rounded(self.tileCornerRadius),
+            strokeColor = self:themeColor("tileStrokeColor"),
+            strokeWidth = 1,
+        }
+    )
+
+
+    if isSelected then
+
+        table.insert(
+            elements,
+            {
+                type = "rectangle",
+                action = "stroke",
+                frame = {
+                    x = thumbFrame.x - 5,
+                    y = thumbFrame.y - 5,
+                    w = thumbFrame.w + 10,
+                    h = thumbFrame.h + 10,
+                },
+                roundedRectRadii = rounded(self.tileCornerRadius + 4),
+                strokeColor = self:themeColor("selectedBorderColor"),
+                strokeWidth = self.selectedStrokeWidth,
+            }
+        )
+
+    end
+
+
+    table.insert(
+        elements,
+        {
+            type = "image",
+            frame = {
+                x = labelX,
+                y = labelY,
+                w = self.iconSize,
+                h = self.iconSize,
+            },
+            image = self:appIcon(entry),
+            imageScaling = "scaleProportionally",
+            imageAlpha = alpha,
+        }
+    )
+
+
+    table.insert(
+        elements,
+        {
+            type = "text",
+            frame = {
+                x = labelX + self.iconSize + 10,
+                y = labelY - 1,
+                w = item.labelWidth - self.iconSize - 10,
+                h = self.labelHeight,
+            },
+            text = self:styledTitle(entry, isSelected),
+        }
+    )
+
+
+    if self.enableMouseSelection then
+
+        table.insert(
+            elements,
+            {
+                id = "tile:" .. tostring(item.index),
+                type = "rectangle",
+                action = "fill",
+                frame = {
+                    x = offsetX + item.x - 8,
+                    y = offsetY + item.y - 6,
+                    w = item.width + 16,
+                    h = item.height + 14,
+                },
+                roundedRectRadii = rounded(self.tileCornerRadius + 8),
+                fillColor = self:themeColor("hitTargetColor"),
+                trackMouseDown = true,
+                trackMouseUp = true,
+                trackMouseEnterExit = true,
+                trackMouseMove = true,
+            }
+        )
+
+    end
+
+end
+
+
+-- Le panneau s'ouvre souvent sous le pointeur. Comme les tuiles
+-- suivent aussi mouseMove, le moindre fremissement du trackpad
+-- ecrasait la selection au clavier pendant que l'utilisateur tabulait.
+-- La souris ne reprend la main qu'apres un deplacement reel.
+
+function obj:armMouseSelection()
+
+    self.mouseArmed =
+        false
+
+
+    self.mouseOrigin =
+        safeCall(function()
+
+            return hs.mouse.absolutePosition()
+
+        end)
+
+
+    return self
+
+end
+
+
+function obj:mouseHasMoved()
+
+    if self.mouseArmed then
+
+        return true
+
+    end
+
+
+    local origin =
+        self.mouseOrigin
+
+
+    if not origin then
+
+        self.mouseArmed =
+            true
+
+
+        return true
+
+    end
+
+
+    local position =
+        safeCall(function()
+
+            return hs.mouse.absolutePosition()
+
+        end)
+
+
+    if not position then
+
+        return false
+
+    end
+
+
+    local distance =
+        math.max(
+            math.abs(position.x - origin.x),
+            math.abs(position.y - origin.y)
+        )
+
+
+    if distance >= self.mouseActivationDistance then
+
+        self.mouseArmed =
+            true
+
+    end
+
+
+    return self.mouseArmed
+
+end
+
+
+function obj:handleMouseEvent(message, elementID)
+
+    local index =
+        tostring(elementID or ""):match("^tile:(%d+)$")
+
+
+    if not index then
+
+        return
+
+    end
+
+
+    index =
+        tonumber(index)
+
+
+    if not index or not self.entries or not self.entries[index] then
+
+        return
+
+    end
+
+
+    -- Un clic est toujours une intention explicite ; un survol, non.
+
+    if message ~= "mouseUp" and not self:mouseHasMoved() then
+
+        return
+
+    end
+
+
+    if message == "mouseEnter" or message == "mouseMove" then
+
+        if self.selectedIndex ~= index then
+
+            self.selectedIndex =
+                index
+
+
+            self:redraw()
+
+        end
+
+    elseif message == "mouseUp" then
+
+        self.selectedIndex =
+            index
+
+
+        self:commit()
+
+    end
+
+end
+
+
+function obj:renderElements(layout)
+
+    local elements =
+        {
+            self:panelElement(layout),
+        }
+
+
+    for _, item in ipairs(layout.items or {}) do
+
+        self:tileElements(
+            elements,
+            item,
+            layout.panel.x,
+            layout.panel.y
+        )
+
+    end
+
+
+    return elements
+
+end
+
+
+function obj:showCanvas(layout, elements)
+
+    if not self.switcherCanvas then
+
+        self.switcherCanvas =
+            canvas.new(layout.canvas or layout.panel)
+
+        self.switcherCanvas:level(canvas.windowLevels.overlay)
+
+        if self.enableMouseSelection then
+
+            local mouseOk =
+                safeCall(function()
+
+                    self.switcherCanvas:clickActivating(false)
+                    self.switcherCanvas:mouseCallback(function(_canvas, message, elementID)
+
+                        self:handleMouseEvent(message, elementID)
+
+                    end)
+
+
+                    if self.switcherCanvas.canvasMouseEvents then
+
+                        self.switcherCanvas:canvasMouseEvents(true, true, false, false)
+
+                    end
+
+                    return true
+
+                end)
+
+
+            if not mouseOk then
+
+                self.enableMouseSelection =
+                    false
+
+
+                self:log("Selection souris desactivee : API canvas indisponible")
+
+            end
+
+        end
+
+    else
+
+        self.switcherCanvas:frame(layout.canvas or layout.panel)
+
+    end
+
+
+    local ok,
+          err =
+        pcall(function()
+
+            self.switcherCanvas:replaceElements(
+                unpackTable(elements)
+            )
+
+
+            self.switcherCanvas:show(0)
+
+        end)
+
+
+    if not ok then
+
+        self:log("Erreur rendu canvas : " .. tostring(err))
+
+
+        if self.enableMouseSelection then
+
+            self.enableMouseSelection =
+                false
+
+
+            self.switcherCanvas:replaceElements(
+                unpackTable(self:renderElements(layout))
+            )
+
+
+            self.switcherCanvas:show(0)
+
+        end
+
+    end
+
+end
+
+
+function obj:hideCanvas()
+
+    if self.switcherCanvas then
+
+        self.switcherCanvas:hide(0)
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:deleteCanvas()
+
+    if self.switcherCanvas then
+
+        self.switcherCanvas:delete(0)
+
+        self.switcherCanvas =
+            nil
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:stopScreenCaptureTasks()
+
+    for _, running in pairs(self.runningScreenCaptures or {}) do
+
+        local job =
+            running.job or running
+
+
+        if type(job) == "table" and job.token then
+
+            self:removeFile(self:screenCaptureRequestPath(job))
+            self:removeFile(self:screenCaptureStatusPath(job))
+            self:removeFile(job.outputPath)
+
+        end
+
+    end
+
+
+    self.screenCaptureQueue =
+        {}
+
+
+    self.queuedScreenCaptures =
+        {}
+
+
+    self.runningScreenCaptures =
+        {}
+
+
+    if self.screenCapturePollTimer then
+
+        self.screenCapturePollTimer:stop()
+
+        self.screenCapturePollTimer =
+            nil
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:cancelPendingRedraw()
+
+    if self.redrawTimer then
+
+        self.redrawTimer:stop()
+
+        self.redrawTimer =
+            nil
+
+    end
+
+
+    return self
+
+end
+
+
+-- Une capture qui arrive declenche un rendu. Quand plusieurs
+-- reviennent dans la meme fraction de seconde, un seul suffit.
+
+function obj:scheduleRedraw()
+
+    if not self.entries then
+
+        return self
+
+    end
+
+
+    if self.redrawTimer then
+
+        return self
+
+    end
+
+
+    self.redrawTimer =
+        timer.doAfter(
+            self.redrawCoalesceSeconds,
+            function()
+
+                self.redrawTimer =
+                    nil
+
+
+                self:redraw()
+
+            end
+        )
+
+
+    return self
+
+end
+
+
+function obj:redraw()
+
+    if not self.entries or #self.entries == 0 then
+
+        return self
+
+    end
+
+
+    local pageSize =
+        self.maxColumns * self.maxRows
+
+
+    local startIndex,
+          endIndex =
+        self:visibleRange(#self.entries, pageSize)
+
+
+    -- La geometrie ne depend pas de la selection : seuls le liseré et
+    -- la taille du libelle changent. Inutile de tout recalculer a
+    -- chaque appui sur Tab.
+
+    local cache =
+        self.layoutCache
+
+
+    local layout,
+          layoutErr
+
+
+    if cache
+        and cache.startIndex == startIndex
+        and cache.endIndex == endIndex then
+
+        layout =
+            cache.layout
+
+    else
+
+        layout,
+        layoutErr =
+            safeCall(function()
+
+                return self:layout(startIndex, endIndex)
+
+            end)
+
+
+        if layout then
+
+            self.layoutCache =
+                {
+                    startIndex = startIndex,
+                    endIndex = endIndex,
+                    layout = layout,
+                }
+
+        end
+
+    end
+
+
+    if not layout then
+
+        self:log("Erreur layout canvas : " .. tostring(layoutErr))
+
+
+        return self
+
+    end
+
+
+    local elements,
+          renderErr =
+        safeCall(function()
+
+            return self:renderElements(layout)
+
+        end)
+
+
+    if not elements then
+
+        self:log("Erreur elements canvas : " .. tostring(renderErr))
+
+
+        return self
+
+    end
+
+
+    self:showCanvas(layout, elements)
+
+
+    return self
+
+end
+
+
+-- L'ancienne version interrogeait le clavier toutes les 10 ms pendant
+-- toute la duree du switch, soit cent sondages par seconde sur le
+-- thread principal. Un eventtap sur flagsChanged reagit a l'instant
+-- exact ou la touche retombe et ne coute rien entre deux evenements.
+-- Le timer qui reste n'est qu'un filet : si le tap manque un
+-- evenement, le panneau ne doit pas rester ouvert indefiniment.
+
+function obj:ensureModifierTap()
+
+    if self.modifierTap then
+
+        return self.modifierTap
+
+    end
+
+
+    local tap =
+        eventtap.new(
+            { eventtap.event.types.flagsChanged },
+            function()
+
+                if not self:modifiersPressed() then
+
+                    self:commit()
+
+                end
+
+
+                return false
+
+            end
+        )
+
+
+    self.modifierTap =
+        tap
+
+
+    return tap
+
+end
+
+
+function obj:startModifierWatcher()
+
+    self:stopModifierWatcher()
+
+
+    local tap =
+        self:ensureModifierTap()
+
+
+    local tapStarted =
+        false
+
+
+    if tap then
+
+        tapStarted =
+            safeCall(function()
+
+                tap:start()
+
+
+                return true
+
+            end) == true
+
+    end
+
+
+    local interval =
+        tapStarted and self.modifierSafetyInterval
+            or self.modifierFallbackInterval
+
+
+    self.modifierTimer =
+        timer.doEvery(
+            interval,
+            function()
+
+                if not self:modifiersPressed() then
+
+                    self:commit()
+
+                end
+
+            end
+        )
+
+
+    return self
+
+end
+
+
+function obj:stopModifierWatcher()
+
+    if self.modifierTap then
+
+        safeCall(function()
+
+            self.modifierTap:stop()
+
+        end)
+
+    end
+
+
+    if self.modifierTimer then
+
+        self.modifierTimer:stop()
+
+        self.modifierTimer =
+            nil
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:releaseModifierTap()
+
+    self:stopModifierWatcher()
+
+
+    self.modifierTap =
+        nil
+
+
+    return self
+
+end
+
+
+
+------------------------------------------------------------
+-- HOTKEYS
+------------------------------------------------------------
+
+function obj:deleteHotkeys()
+
+    for _, hotkey in pairs(self.hotkeys or {}) do
+
+        if hotkey then
+
+            hotkey:delete()
+
+        end
+
+    end
+
+
+    self.hotkeys =
+        {}
+
+
+    return self
+
+end
+
+
+function obj:bindHotkeys(mapping)
+
+    self.hotkeyMapping =
+        mapping or {}
+
+
+    if self.isStarted then
+
+        self:createHotkeys()
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:createHotkeys()
+
+    self:deleteHotkeys()
+
+
+    local mapping =
+        self.hotkeyMapping or {}
+
+
+    if mapping.forward then
+
+        self.hotkeys.forward =
+            hs.hotkey.bind(
+                mapping.forward[1],
+                mapping.forward[2],
+                function()
+
+                    self:next()
+
+                end,
+                nil,
+                function()
+
+                    self:next()
+
+                end
+            )
+
+    end
+
+
+    if mapping.backward then
+
+        self.hotkeys.backward =
+            hs.hotkey.bind(
+                mapping.backward[1],
+                mapping.backward[2],
+                function()
+
+                    self:previous()
+
+                end,
+                nil,
+                function()
+
+                    self:previous()
+
+                end
+            )
+
+    end
+
+
+    return self
+
+end
+
+
+
+------------------------------------------------------------
+-- ACTIONS
+------------------------------------------------------------
+
+function obj:selectRelative(direction)
+
+    if not self.entries or #self.entries == 0 then
+
+        return
+
+    end
+
+
+    self.selectedIndex =
+        (self.selectedIndex or 1) + direction
+
+
+    if self.selectedIndex < 1 then
+
+        self.selectedIndex =
+            #self.entries
+
+    elseif self.selectedIndex > #self.entries then
+
+        self.selectedIndex =
+            1
+
+    end
+
+end
+
+
+function obj:beginSession(direction)
+
+    self.layoutCache =
+        nil
+
+
+    self.titleCache =
+        {}
+
+
+    self:trimSnapshotCache()
+
+
+    self.entries =
+        self:collectWindows()
+
+
+    if not self.entries or #self.entries == 0 then
+
+        self.entries =
+            nil
+
+        return false
+
+    end
+
+
+    self.selectedIndex =
+        1
+
+
+    if #self.entries > 1 then
+
+        self:selectRelative(direction)
+
+    end
+
+
+    self:armMouseSelection()
+    self:startModifierWatcher()
+
+
+    return true
+
+end
+
+
+function obj:step(direction)
+
+    local now =
+        timer.secondsSinceEpoch()
+
+
+    if self.entries and self.lastStepAt and now - self.lastStepAt < self.stepThrottleSeconds then
+
+        return
+
+    end
+
+
+    self.lastStepAt =
+        now
+
+
+    if not self.entries then
+
+        if not self:beginSession(direction) then
+
+            return
+
+        end
+
+    else
+
+        self:selectRelative(direction)
+
+    end
+
+
+    self:redraw()
+
+end
+
+
+function obj:next()
+
+    self:step(1)
+
+end
+
+
+function obj:previous()
+
+    self:step(-1)
+
+end
+
+
+function obj:commit()
+
+    local selected =
+        self.entries and self.entries[self.selectedIndex]
+
+
+    self:stopModifierWatcher()
+    self:cancelPendingRedraw()
+    self:hideCanvas()
+
+    self.entries =
+        nil
+
+    self.selectedIndex =
+        nil
+
+    self.lastStepAt =
+        nil
+
+    self.layoutCache =
+        nil
+
+    self.titleCache =
+        {}
+
+    self.mouseArmed =
+        false
+
+    self.mouseOrigin =
+        nil
+
+
+    if not selected then
+
+        return
+
+    end
+
+
+    -- Une application masquee par Cmd+H ne se reaffiche pas d'elle
+    -- meme : hs.window:focus() ne fait que becomeMain puis
+    -- bringtofront. Comme includeHidden vaut true par defaut, ses
+    -- fenetres etaient listees dans la grille sans qu'on puisse les
+    -- atteindre.
+
+    if selected.hidden and selected.application then
+
+        safeCall(function()
+
+            selected.application:unhide()
+
+        end)
+
+    end
+
+
+    safeCall(function()
+
+        selected.window:unminimize()
+
+    end)
+
+
+    safeCall(function()
+
+        selected.window:focus()
+
+    end)
+
+
+    self:reassertFocus(selected)
+
+end
+
+
+function obj:reassertFocus(selected)
+
+    if not self.focusReassertDelay
+        or self.focusReassertDelay <= 0 then
+
+        return self
+
+    end
+
+
+    timer.doAfter(
+        self.focusReassertDelay,
+        function()
+
+            local focused =
+                safeCall(function()
+
+                    return window.focusedWindow()
+
+                end)
+
+
+            local focusedID =
+                focused and safeCall(function()
+
+                    return focused:id()
+
+                end)
+
+
+            if focusedID == selected.id then
+
+                return
+
+            end
+
+
+            safeCall(function()
+
+                selected.window:focus()
+
+            end)
+
+        end
+    )
+
+
+    return self
+
+end
+
+
+
+------------------------------------------------------------
+-- START / STOP
+------------------------------------------------------------
+
+function obj:start()
+
+    if self.isStarted then
+
+        return self
+
+    end
+
+
+    self.isStarted =
+        true
+
+
+    self.screenCaptureDisabledReason =
+        nil
+
+    self.screenCaptureHelperAppStarted =
+        false
+
+
+    self.screenCaptureSessionID =
+        nil
+
+
+    self.screenCaptureSessionSecret =
+        nil
+
+
+    self.screenCaptureSessionDirectory =
+        nil
+
+
+    self.captureFiles =
+        {}
+
+
+    -- Un helper survivant d'une session precedente pointe vers un
+    -- repertoire qui n'existe plus : il ne repondrait a aucune de nos
+    -- requetes tout en nous faisant croire qu'un service tourne.
+
+    self:stopScreenCaptureHelperApp()
+
+    self:createScreenCaptureSession()
+    self:cleanupScreenCaptureSessions()
+
+
+    self:refreshIgnoredBundles(true)
+
+
+    -- Monter le filtre des maintenant plutot qu'au premier Alt+Tab :
+    -- hs.window.filter a besoin d'un instant pour enregistrer toutes
+    -- les applications, et c'est ce delai qui rendait le premier
+    -- switch lent.
+
+    self:ensureWindowFilter()
+
+    self:createHotkeys()
+
+    self:log("Spoon initialise")
+
+
+    return self
+
+end
+
+
+function obj:stop()
+
+    if not self.isStarted then
+
+        return self
+
+    end
+
+
+    self.isStarted =
+        false
+
+
+    self:deleteHotkeys()
+    self:releaseModifierTap()
+    self:cancelPendingRedraw()
+    self:stopScreenCaptureTasks()
+    self:stopScreenCaptureHelperApp()
+
+
+    -- L'ancienne version se contentait de masquer le canvas : un Spoon
+    -- desactive gardait en memoire son canvas et toutes ses vignettes.
+
+    self:deleteCanvas()
+    self:releaseWindowFilter()
+    self:clearSnapshotCache()
+    self:removeScreenCaptureSession()
+
+
+    self.entries =
+        nil
+
+    self.selectedIndex =
+        nil
+
+    self.lastStepAt =
+        nil
+
+    self.layoutCache =
+        nil
+
+    self.titleCache =
+        {}
+
+    self.iconCache =
+        {}
+
+    self.captureFiles =
+        {}
+
+    self.mouseArmed =
+        false
+
+    self.mouseOrigin =
+        nil
+
+    self.screenCaptureDisabledReason =
+        nil
+
+    self:log("Spoon arrete")
+
+
+    return self
+
+end
+
+
+return obj

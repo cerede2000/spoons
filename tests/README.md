@@ -21,6 +21,9 @@ lua tests/lwq_config.lua LastWindowQuits.spoon/init.lua   # une seule suite
 | `finder_cutpaste`| FinderCutPaste  | marqueur de copie synthétique, indicateur ciseaux |
 | `sm_menu`        | SpoonManager    | sous-menu d'icône, accesseurs |
 | `sm_robustesse`  | SpoonManager    | entrées mal formées, échecs de démarrage, `stop()` |
+| `ws_fenetres`    | WindowSwitcher  | descripteurs, filtre permanent, collecte, ordre de profondeur, exclusions |
+| `ws_capture`     | WindowSwitcher  | cycle de vie du service ScreenCaptureKit, protocole, caches, fichiers /tmp |
+| `ws_session`     | WindowSwitcher  | modificateurs, souris, cache de géométrie, activation, arrêt |
 
 ## Écrire une suite
 
@@ -32,3 +35,12 @@ lua tests/lwq_config.lua LastWindowQuits.spoon/init.lua   # une seule suite
 Les fabriques `lib.app(ctl, opts)` et `lib.window(opts)` reproduisent le
 comportement réel de macOS — notamment qu'une fenêtre réduite perd son
 subrole standard, et qu'une application terminée ne répond plus qu'à `pid()`.
+
+### Bouchon en mode fichiers virtuels
+
+Les suites WindowSwitcher appellent `lib.install({ virtualFS = true })` :
+`io.open`, `os.remove` et `os.rename` sont alors redirigés vers `ctl.files`,
+et `hs.fs` vers `ctl.files` / `ctl.dirs`. Aucune suite ne touche au disque.
+
+`require("hs.window.filter")` est également intercepté, WindowSwitcher
+important ses modules plutôt que d'utiliser la table `hs` globale.
