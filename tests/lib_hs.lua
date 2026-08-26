@@ -10,6 +10,8 @@ function M.install(opts)
         interfaceStyle = nil,
         idle = 0,
         kbSequence = { 0.0 }, kbIndex = 0,
+        axCalls = 0, axMode = "ok", killed = {}, deadCalls = {},
+        runningApps = {}, powerFn = nil, windowFilterEvents = {},
     }
 
     local function screenObj(t)
@@ -60,12 +62,31 @@ function M.install(opts)
         host = { idleTime=function() return ctl.idle end,
                  interfaceStyle=function() return ctl.interfaceStyle end },
         battery = { percentage=function() return 80 end, powerSource=function() return "AC Power" end },
+        application = setmetatable({
+            runningApplications = function() return ctl.runningApps end,
+            get = function(key)
+                for _, a in ipairs(ctl.runningApps) do
+                    if a._bundle == key or a._name == key then return a end
+                end
+                return nil
+            end,
+            watcher = setmetatable({ new = function(fn) ctl.appWatcherFn = fn
+                    return { start=function() end, stop=function() end } end },
+                { __index = function(_, k) return k end }),
+        }, {}),
+        window = { filter = setmetatable({
+            new = function() local f = { events = {} }
+                f.subscribe = function(_, e, cb) f.events[e] = cb; ctl.windowFilterEvents[e] = cb; return f end
+                f.unsubscribe = function() return f end
+                return f end },
+            { __index = function(_, k) return k end }) },
         hotkey = { bind=function() return { delete=function() end } end },
         mouse = { absolutePosition=function() return {x=400,y=300} end },
         notify = { new=function() return { send=function() end } end },
         alert = { show=function(m) table.insert(ctl.printed, "ALERT:" .. tostring(m)) end },
         caffeinate = { set=function() end,
-                       watcher = setmetatable({ new=function() return {start=function() end, stop=function() end} end },
+                       watcher = setmetatable({ new=function(fn) ctl.powerFn = fn
+                                       return {start=function() end, stop=function() end} end },
                                               { __index=function(_,k) return k end }) },
         styledtext = { new=function(txt, attrs) return { _text=txt, _attrs=attrs } end },
         drawing = { getTextDrawingSize=function(st)
@@ -112,7 +133,55 @@ function M.install(opts)
         end
     end
     ctl.shutdown = function() if shutdownCb then shutdownCb() end end
+    ctl.power = function(event) if ctl.powerFn then ctl.powerFn(event) end end
+    ctl.fireOnly = function(delay)
+        local snap = ctl.timers; ctl.timers = {}
+        for _, t in ipairs(snap) do
+            if not t.stopped and (delay == nil or t.delay == delay) then t.fn()
+            elseif not t.stopped then table.insert(ctl.timers, t) end
+        end
+    end
     return ctl
+end
+
+
+------------------------------------------------------------
+-- Fabriques fenêtres / applications
+------------------------------------------------------------
+
+-- kind : 1 = application du Dock, 0 = agent, -1 = daemon
+function M.app(ctl, opts)
+    local a = {
+        _name = opts.name, _bundle = opts.bundle, _kind = opts.kind or 1,
+        _windows = opts.windows or {}, _dead = false,
+    }
+    a.name       = function() if a._dead then ctl.deadCalls[#ctl.deadCalls+1]="name" return nil end return a._name end
+    a.bundleID   = function() if a._dead then ctl.deadCalls[#ctl.deadCalls+1]="bundleID" return nil end return a._bundle end
+    a.kind       = function() if a._dead then ctl.deadCalls[#ctl.deadCalls+1]="kind" return nil end return a._kind end
+    a.pid        = function() return opts.pid or 4242 end
+    a.allWindows = function()
+        if a._dead then ctl.deadCalls[#ctl.deadCalls+1]="allWindows" return {} end
+        ctl.axCalls = ctl.axCalls + 1
+        if ctl.axMode == "vide" then return {} end
+        if ctl.axMode == "erreur" then error("AX muette") end
+        return a._windows
+    end
+    a.kill = function() table.insert(ctl.killed, a._name); return true end
+    a.isHidden = function() return false end
+    return a
+end
+
+-- role/visible/standard reproduisent ce que macOS renvoie réellement :
+-- une fenêtre réduite perd son subrole standard.
+function M.window(opts)
+    local w = {}
+    w.id          = function() return opts.id end
+    w.role        = function() return opts.role or "AXWindow" end
+    w.isVisible   = function() if opts.visible == nil then return true end return opts.visible end
+    w.isStandard  = function() if opts.standard == nil then return true end return opts.standard end
+    w.isMinimized = function() return opts.minimized == true end
+    w.application = function() return opts.app end
+    return w
 end
 
 function M.runner()

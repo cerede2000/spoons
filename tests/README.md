@@ -1,17 +1,32 @@
 # Tests
 
-Suites unitaires exécutables hors Hammerspoon : `lib_hs.lua` installe un
-bouchon de l'API `hs`, chaque suite charge le Spoon avec `dofile` et
-vérifie son comportement.
+Suites unitaires exécutables **sans Hammerspoon** : `lib_hs.lua` installe un
+bouchon de l'API `hs`, chaque suite charge le Spoon avec `dofile` et vérifie
+son comportement.
 
 ```bash
-lua tests/ak_core.lua  ActivityKeeper.spoon/init.lua
-lua tests/ak_filet.lua ActivityKeeper.spoon/init.lua
-lua tests/ak_toast.lua ActivityKeeper.spoon/init.lua
+sh tests/run-all.sh          # tout
+lua tests/lwq_config.lua LastWindowQuits.spoon/init.lua   # une seule suite
 ```
 
-| suite      | couvre |
-|------------|--------|
-| `ak_core`  | chemins d'événement, taps, commandes shell, rétroéclairage, luminosité écran |
-| `ak_filet` | consignation et reprise de l'état système, hook d'arrêt |
-| `ak_toast` | bulle de notification : ancrage, thème, cycle de vie |
+| suite            | Spoon           | couvre |
+|------------------|-----------------|--------|
+| `ak_core`        | ActivityKeeper  | chemins d'événement, taps système, commandes shell, rétroéclairage, luminosité écran |
+| `ak_filet`       | ActivityKeeper  | consignation et reprise de l'état système, hook d'arrêt |
+| `ak_toast`       | ActivityKeeper  | bulle de notification : ancrage, thème, cycle de vie |
+| `lwq_windows`    | LastWindowQuits | comptage des fenêtres, réduction, `windowRejected`, coût du scan |
+| `lwq_securite`   | LastWindowQuits | veille et verrouillage, arrêt du Spoon, application terminée |
+| `lwq_config`     | LastWindowQuits | autorité de `init.lua`, menu sans icône, raccourcis |
+| `sm_menu`        | SpoonManager    | sous-menu d'icône, accesseurs |
+| `sm_robustesse`  | SpoonManager    | entrées mal formées, échecs de démarrage, `stop()` |
+
+## Écrire une suite
+
+`lib_hs.install()` renvoie une table de contrôle : `store` (hs.settings),
+`shell` (commandes émises), `canvases`, `timers`, `killed`, `runningApps`,
+`axMode` (`ok` / `vide` / `erreur`), plus `fireTimers()`, `power(event)` et
+`shutdown()` pour déclencher les callbacks.
+
+Les fabriques `lib.app(ctl, opts)` et `lib.window(opts)` reproduisent le
+comportement réel de macOS — notamment qu'une fenêtre réduite perd son
+subrole standard, et qu'une application terminée ne répond plus qu'à `pid()`.

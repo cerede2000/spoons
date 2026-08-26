@@ -1,0 +1,11 @@
+com.apple.finder
+com.apple.controlcenter
+com.microsoft.Outlook
+com.microsoft.teams2
+com.objective-see.lulu.app
+com.adobe.bridge
+com.hnc.discord
+com.lwouis.alt-tab-macos
+com.idemfactor.Click2Minimize
+com.apple.notificationcenterui
+pro.bettercmdtab.BetterCmdTab
