@@ -86,7 +86,9 @@ spoon.WindowSwitcher.mouseActivationDistance = 6
 spoon.WindowSwitcher.focusReassertDelay = 0.12
 spoon.WindowSwitcher.snapshotBudgetSeconds = 0.045
 spoon.WindowSwitcher.enableWindowPreview = true
-spoon.WindowSwitcher.previewDelay = 0.3
+spoon.WindowSwitcher.previewDelay = 0.65
+spoon.WindowSwitcher.previewFollowDelay = 0.14
+spoon.WindowSwitcher.previewWarmthSeconds = 1.5
 spoon.WindowSwitcher.previewOnKeyboard = true
 ```
 
@@ -102,9 +104,29 @@ grille reste lisible et cliquable. Un liseré aux couleurs de la
 selection le delimite, ce qui le rend visible meme lorsqu'il recouvre
 exactement une fenetre deja au premier plan.
 
-`previewDelay` est le temps d'arret avant apparition : il evite que
-l'apercu clignote quand on parcourt la grille rapidement. Mettre
-`previewOnKeyboard = false` reserve l'apercu au survol de la souris.
+Le delai suit la convention des infobulles du systeme : une amorce
+franche, puis un enchainement rapide.
+
+| reglage | role |
+|---|---|
+| `previewDelay` | temps d'arret avant le **premier** apercu, 0,65 s |
+| `previewFollowDelay` | delai des **suivants**, 0,14 s |
+| `previewWarmthSeconds` | au-dela de ce silence, on repasse par l'amorce |
+
+L'amorce est assez longue pour qu'un parcours rapide de la grille ne
+declenche aucun apercu : tant qu'on saute de tuile en tuile, le compte a
+rebours est remis a zero et rien n'apparait. Des qu'on s'arrete, l'apercu
+vient.
+
+Une fois le premier apercu montre, on est en train de comparer des
+fenetres : les suivants suivent le regard. Sans cette distinction,
+comparer trois fenetres couterait trois fois le delai d'amorce.
+
+Apres `previewWarmthSeconds` sans apercu, la session redevient une
+exploration et l'amorce s'applique de nouveau. Une nouvelle session
+repart toujours froide.
+
+Mettre `previewOnKeyboard = false` reserve l'apercu au survol souris.
 
 Une fenetre dont le cadre depasse l'ecran est reduite en conservant ses
 proportions ; une fenetre sans cadre exploitable est centree.
