@@ -360,6 +360,44 @@ final class WindowCaptureHelper: NSObject, NSApplicationDelegate {
         return value
     }
 
+    /// Le pid renvoye par CoreAudio est celui qui produit reellement le
+    /// son, pas celui de l'application. Un navigateur joue depuis un
+    /// processus auxiliaire : Edge annonce le pid 1396 alors que sa
+    /// fenetre appartient au pid 621. Sans remonter la filiation, aucune
+    /// pastille ne pouvait correspondre.
+    ///
+    /// On renvoie donc le pid et ses ancetres, jusqu'a launchd exclu.
+    /// Le switcher n'a qu'a chercher le pid de sa fenetre dans
+    /// l'ensemble : tester l'appartenance cote appelant evite d'avoir a
+    /// decider ici lequel des ancetres est "l'application", question
+    /// sans reponse fiable quand certains auxiliaires s'enregistrent
+    /// eux-memes comme applications.
+    private static func parentPID(of pid: pid_t) -> pid_t? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else {
+            return nil
+        }
+
+        return info.kp_eproc.e_ppid
+    }
+
+    private static func lineage(_ pid: pid_t) -> [pid_t] {
+        var chain: [pid_t] = [pid]
+        var current = pid
+
+        for _ in 0..<6 {
+            guard let parent = parentPID(of: current), parent > 1 else { break }
+            if chain.contains(parent) { break }
+            chain.append(parent)
+            current = parent
+        }
+
+        return chain
+    }
+
     private static func audioSnapshot() -> String {
         guard #available(macOS 14.4, *) else { return "out=;in=" }
 
@@ -394,14 +432,15 @@ final class WindowCaptureHelper: NSObject, NSApplicationDelegate {
                 continue
             }
             if (audioProperty(object, kAudioProcessPropertyIsRunningOutput, UInt32(0)) ?? 0) != 0 {
-                playing.append(String(pid))
+                playing.append(contentsOf: lineage(pid).map(String.init))
             }
             if (audioProperty(object, kAudioProcessPropertyIsRunningInput, UInt32(0)) ?? 0) != 0 {
-                recording.append(String(pid))
+                recording.append(contentsOf: lineage(pid).map(String.init))
             }
         }
 
-        return "out=\(playing.joined(separator: ","));in=\(recording.joined(separator: ","))"
+        return "out=\(Array(Set(playing)).joined(separator: ","));"
+            + "in=\(Array(Set(recording)).joined(separator: ","))"
     }
 
     private static func cleaned(_ value: String) -> String {

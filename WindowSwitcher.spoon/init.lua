@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.17.0"
+obj.version = "0.17.1"
 
 obj.author = "Benjamin Cerede / OpenAI"
 

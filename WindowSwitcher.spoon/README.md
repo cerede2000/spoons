@@ -130,6 +130,23 @@ suivante. C'est le prix de l'extinction du service entre deux switchs ;
 allonger `helperIdleGraceSeconds` les rend immediates, au prix de 31 Mo
 residents.
 
+#### Le pid qui joue n'est pas celui de la fenetre
+
+CoreAudio renvoie le processus qui **produit** le son, pas celui qui
+possede la fenetre. Un navigateur joue depuis un processus auxiliaire :
+Edge annonce le pid 1396 alors que sa fenetre appartient au pid 621.
+Sans remonter la filiation, aucune pastille ne pouvait correspondre.
+
+Le service renvoie donc le pid **et ses ancetres**, jusqu'a `launchd`
+exclu : `out=1396,621`. Le switcher cherche simplement le pid de sa
+fenetre dans l'ensemble. Decider cote service lequel des ancetres est
+"l'application" n'aurait pas ete fiable, certains auxiliaires
+s'enregistrant eux-memes comme applications.
+
+Le micro, lui, est souvent capte par un processus systeme sans parent
+applicatif — `corespeechd` pour la dictee — qui n'appartient a aucune
+fenetre et ne porte donc aucune pastille. C'est correct.
+
 ```lua
 spoon.WindowSwitcher:audioStatus()
 ```
@@ -455,10 +472,14 @@ helper.
 swiftc -O window-capture-helper.swift -o window-capture-helper
 ```
 
-Le binaire livre est signe ad hoc. **Le recompiler change son `cdhash`
-et revoque l'autorisation Enregistrement de l'ecran** accordee dans les
-Reglages Systeme : il faut la reaccorder ensuite. Ne le reconstruire que
-si le fichier `.swift` a reellement change.
+Le binaire est signe ad hoc, donc chaque compilation change son
+`cdhash`. **Avec `helperLaunchMode = "task"`, cela n'a plus
+d'importance** : le service n'a plus d'identite TCC propre, il herite de
+celle de Hammerspoon. Verifie en pratique — une capture reussit
+immediatement apres une recompilation, sans rien reaccorder.
+
+En mode `"open"`, en revanche, le service porte sa propre autorisation
+et il faut la reaccorder apres chaque compilation.
 
 Le binaire compile et le bundle `.app` ne sont pas versionnes ici : la
 signature ad hoc est propre a la machine qui l'a produite.

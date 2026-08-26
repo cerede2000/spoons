@@ -416,6 +416,17 @@ obj:applyAudioSnapshot("n'importe quoi")
 R.check("charge illisible : rien plutôt qu'un faux positif",
     next(obj.audioPIDs), nil)
 
+R.section("Le son d'un navigateur est attribué à sa fenêtre")
+-- CoreAudio renvoie le processus qui produit réellement le son. Edge
+-- joue depuis un auxiliaire (1396) alors que sa fenêtre appartient au
+-- processus principal (621). Le service renvoie donc la filiation, et
+-- la pastille se pose sur la bonne tuile.
+obj:applyAudioSnapshot("out=1396,621;in=627")
+R.check("l'auxiliaire est signalé", obj.audioPIDs[1396], true)
+R.check("et l'application aussi", obj.audioPIDs[621], true)
+R.check("le micro reste sur son propre processus", obj.microphonePIDs[627], true)
+R.check("qui ne joue pas de son", obj.audioPIDs[627], nil)
+
 R.section("Une seule demande par session")
 reset()
 obj:queueAudioSnapshot()
