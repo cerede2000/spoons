@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.9.0"
+obj.version = "0.9.1"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -211,6 +211,12 @@ obj.screenCaptureHelperBundleID = "local.hammerspoon.WindowSwitcherCapture"
 -- peut encore etre en train de se demasquer ou de restaurer sa fenetre.
 -- On verifie une fois, peu apres, et on insiste si besoin.
 obj.focusReassertDelay = 0.12
+
+-- hs.window.snapshotForID est synchrone. Douze tuiles a capturer avant
+-- le premier affichage, c'est le temps de fabrication que l'on ressent
+-- a la premiere ouverture. On s'accorde ce budget, en commencant par la
+-- tuile selectionnee ; le reste arrive au rendu suivant.
+obj.snapshotBudgetSeconds = 0.045
 
 obj.theme = "auto"
 
@@ -1722,6 +1728,223 @@ function obj:refreshIgnoredBundles(force)
 end
 
 
+-- Renvoie l'image en cache et si elle est encore fraiche.
+
+function obj:cachedSnapshot(descriptor, now)
+
+    local cached =
+        descriptor and self.snapshotCache[descriptor.id]
+
+
+    if not cached then
+
+        return nil, false
+
+    end
+
+
+    local fresh =
+        cached.time + self.snapshotCacheSeconds
+            > (now or timer.secondsSinceEpoch())
+
+
+    return cached.image, fresh
+
+end
+
+
+function obj:captureVisibleSnapshot(descriptor, now)
+
+    descriptor.snapshotAttempted =
+        true
+
+
+    local snapshot =
+        safeCall(function()
+
+            return window.snapshotForID(descriptor.id)
+
+        end)
+
+
+    if snapshot then
+
+        self.snapshotCache[descriptor.id] =
+            {
+                image = snapshot,
+                time = now,
+            }
+
+
+        return snapshot
+
+    end
+
+
+    -- Le WindowServer n'a rien a offrir : le service prend le relais.
+
+    self:queueScreenCapture(descriptor)
+
+
+    return nil
+
+end
+
+
+-- Ordre de rechauffage : la tuile selectionnee d'abord, puis ses
+-- voisines. C'est celle qu'on regarde ; si le budget ne suffit pas
+-- pour toutes, ce n'est pas elle qui doit attendre.
+
+function obj:warmOrder(startIndex, endIndex, selected)
+
+    if not selected
+        or selected < startIndex
+        or selected > endIndex then
+
+        selected =
+            startIndex
+
+    end
+
+
+    local order =
+        { selected }
+
+
+    local offset =
+        1
+
+
+    while true do
+
+        local added =
+            false
+
+
+        if selected + offset <= endIndex then
+
+            order[#order + 1] =
+                selected + offset
+
+
+            added =
+                true
+
+        end
+
+
+        if selected - offset >= startIndex then
+
+            order[#order + 1] =
+                selected - offset
+
+
+            added =
+                true
+
+        end
+
+
+        if not added then
+
+            break
+
+        end
+
+
+        offset =
+            offset + 1
+
+    end
+
+
+    return order
+
+end
+
+
+function obj:warmSnapshots(startIndex, endIndex)
+
+    if not self.entries then
+
+        return self
+
+    end
+
+
+    local now =
+        timer.secondsSinceEpoch()
+
+
+    local deadline =
+        now + self.snapshotBudgetSeconds
+
+
+    local remaining =
+        false
+
+
+    for _, index in ipairs(self:warmOrder(startIndex, endIndex, self.selectedIndex)) do
+
+        local descriptor =
+            self.entries[index]
+
+
+        local _,
+              fresh =
+            self:cachedSnapshot(descriptor, now)
+
+
+        if descriptor and not fresh then
+
+            if descriptor.minimized or descriptor.hidden then
+
+                -- Deja asynchrone : ne coute rien au budget.
+
+                self:queueScreenCapture(descriptor)
+
+            elseif not self.instantVisibleSnapshots then
+
+                self:queueScreenCapture(descriptor)
+
+            elseif descriptor.snapshotAttempted then
+
+                -- Une seule tentative synchrone par fenetre et par
+                -- session : sans cela une fenetre incapturable serait
+                -- reessayee a chaque rendu.
+
+            elseif timer.secondsSinceEpoch() < deadline then
+
+                self:captureVisibleSnapshot(descriptor, now)
+
+            else
+
+                remaining =
+                    true
+
+            end
+
+        end
+
+    end
+
+
+    if remaining then
+
+        self:scheduleRedraw()
+
+    end
+
+
+    return self
+
+end
+
+
+-- N'interroge plus le WindowServer : warmSnapshots s'en charge, sous
+-- budget, avant le rendu. Une tuile sans capture affiche l'icone de
+-- son application, et la vraie vignette arrive au rendu suivant.
+
 function obj:windowSnapshot(descriptor)
 
     if not descriptor then
@@ -1731,60 +1954,7 @@ function obj:windowSnapshot(descriptor)
     end
 
 
-    local id =
-        descriptor.id
-
-
-    local now =
-        timer.secondsSinceEpoch()
-
-
-    local cached =
-        self.snapshotCache[id]
-
-
-    if cached and cached.time + self.snapshotCacheSeconds > now then
-
-        return cached.image
-
-    end
-
-
-    -- Une fenetre visible se capture instantanement par le
-    -- WindowServer ; inutile de deranger le helper pour elle.
-
-    if self.instantVisibleSnapshots
-        and not descriptor.minimized
-        and not descriptor.hidden then
-
-        local snapshot =
-            safeCall(function()
-
-                return window.snapshotForID(id)
-
-            end)
-
-
-        if snapshot then
-
-            self.snapshotCache[id] =
-                {
-                    image = snapshot,
-                    time = now,
-                }
-
-
-            return snapshot
-
-        end
-
-    end
-
-
-    self:queueScreenCapture(descriptor)
-
-
-    return cached and cached.image or nil
+    return (self:cachedSnapshot(descriptor))
 
 end
 
@@ -3684,56 +3854,89 @@ function obj:renderElements(layout)
 end
 
 
-function obj:showCanvas(layout, elements)
+-- Construire la fenetre graphique coute une allocation systeme. La
+-- faire au demarrage plutot qu'au premier Option+Tab retire ce cout du
+-- chemin critique ; elle reste invisible tant qu'on ne l'affiche pas.
+
+function obj:createCanvas(frame)
+
+    if self.switcherCanvas then
+
+        return self.switcherCanvas
+
+    end
+
+
+    self.switcherCanvas =
+        canvas.new(frame or { x = 0, y = 0, w = 1, h = 1 })
+
 
     if not self.switcherCanvas then
 
-        self.switcherCanvas =
-            canvas.new(layout.canvas or layout.panel)
+        return nil
 
-        self.switcherCanvas:level(canvas.windowLevels.overlay)
-
-        if self.enableMouseSelection then
-
-            local mouseOk =
-                safeCall(function()
-
-                    self.switcherCanvas:clickActivating(false)
-                    self.switcherCanvas:mouseCallback(function(_canvas, message, elementID)
-
-                        self:handleMouseEvent(message, elementID)
-
-                    end)
+    end
 
 
-                    if self.switcherCanvas.canvasMouseEvents then
+    self.switcherCanvas:level(canvas.windowLevels.overlay)
 
-                        self.switcherCanvas:canvasMouseEvents(true, true, false, false)
 
-                    end
+    if self.enableMouseSelection then
 
-                    return true
+        local mouseOk =
+            safeCall(function()
+
+                self.switcherCanvas:clickActivating(false)
+                self.switcherCanvas:mouseCallback(function(_canvas, message, elementID)
+
+                    self:handleMouseEvent(message, elementID)
 
                 end)
 
 
-            if not mouseOk then
+                if self.switcherCanvas.canvasMouseEvents then
 
-                self.enableMouseSelection =
-                    false
+                    self.switcherCanvas:canvasMouseEvents(true, true, false, false)
+
+                end
 
 
-                self:log("Selection souris desactivee : API canvas indisponible")
+                return true
 
-            end
+            end)
+
+
+        if not mouseOk then
+
+            self.enableMouseSelection =
+                false
+
+
+            self:log("Selection souris desactivee : API canvas indisponible")
 
         end
 
-    else
+    end
 
-        self.switcherCanvas:frame(layout.canvas or layout.panel)
+
+    return self.switcherCanvas
+
+end
+
+
+function obj:showCanvas(layout, elements)
+
+    self:createCanvas(layout.canvas or layout.panel)
+
+
+    if not self.switcherCanvas then
+
+        return
 
     end
+
+
+    self.switcherCanvas:frame(layout.canvas or layout.panel)
 
 
     local ok,
@@ -3978,6 +4181,9 @@ function obj:redraw()
         return self
 
     end
+
+
+    self:warmSnapshots(startIndex, endIndex)
 
 
     local elements,
@@ -4508,6 +4714,180 @@ end
 
 
 ------------------------------------------------------------
+-- MESURE
+------------------------------------------------------------
+
+-- A lancer depuis la console Hammerspoon :
+--     spoon.WindowSwitcher:benchmark()
+--
+-- Construit une session complete sans l'afficher et detaille le temps
+-- de chaque etape. Utile pour savoir ou passe reellement le temps de la
+-- premiere ouverture plutot que de le supposer.
+
+function obj:benchmark(coldCache)
+
+    local mark =
+        timer.secondsSinceEpoch
+
+
+    local sauvegarde =
+        {
+            entries = self.entries,
+            selectedIndex = self.selectedIndex,
+            layoutCache = self.layoutCache,
+            titleCache = self.titleCache,
+        }
+
+
+    if coldCache ~= false then
+
+        self.snapshotCache =
+            {}
+
+
+        self.iconCache =
+            {}
+
+    end
+
+
+    self.layoutCache =
+        nil
+
+
+    self.titleCache =
+        {}
+
+
+    local t0 =
+        mark()
+
+
+    self.entries =
+        self:collectWindows()
+
+
+    local t1 =
+        mark()
+
+
+    local total =
+        #(self.entries or {})
+
+
+    if total == 0 then
+
+        self.entries =
+            sauvegarde.entries
+
+
+        self:log("benchmark : aucune fenetre")
+
+
+        return self
+
+    end
+
+
+    self.selectedIndex =
+        math.min(2, total)
+
+
+    local pageSize =
+        self.maxColumns * self.maxRows
+
+
+    local startIndex,
+          endIndex =
+        self:visibleRange(total, pageSize)
+
+
+    local layout =
+        self:layout(startIndex, endIndex)
+
+
+    local t2 =
+        mark()
+
+
+    self:warmSnapshots(startIndex, endIndex)
+
+
+    local t3 =
+        mark()
+
+
+    local elements =
+        self:renderElements(layout)
+
+
+    local t4 =
+        mark()
+
+
+    local captures =
+        0
+
+
+    for index = startIndex, endIndex do
+
+        local _,
+              fresh =
+            self:cachedSnapshot(self.entries[index])
+
+
+        if fresh then
+
+            captures =
+                captures + 1
+
+        end
+
+    end
+
+
+    self:log(
+        string.format(
+            "benchmark : %d fenetres, %d tuiles, %d elements | "
+            .. "collecte %.0f ms | geometrie %.0f ms | "
+            .. "captures %.0f ms (%d/%d prêtes) | rendu %.0f ms | total %.0f ms",
+            total,
+            endIndex - startIndex + 1,
+            #elements,
+            (t1 - t0) * 1000,
+            (t2 - t1) * 1000,
+            (t3 - t2) * 1000,
+            captures,
+            endIndex - startIndex + 1,
+            (t4 - t3) * 1000,
+            (t4 - t0) * 1000
+        )
+    )
+
+
+    self.entries =
+        sauvegarde.entries
+
+
+    self.selectedIndex =
+        sauvegarde.selectedIndex
+
+
+    self.layoutCache =
+        sauvegarde.layoutCache
+
+
+    self.titleCache =
+        sauvegarde.titleCache
+
+
+    return self
+
+end
+
+
+
+------------------------------------------------------------
 -- START / STOP
 ------------------------------------------------------------
 
@@ -4566,6 +4946,11 @@ function obj:start()
     -- switch lent.
 
     self:ensureWindowFilter()
+
+
+    -- Allouee des maintenant, affichee seulement au premier switch.
+
+    self:createCanvas()
 
     self:createHotkeys()
 

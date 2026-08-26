@@ -83,7 +83,34 @@ spoon.WindowSwitcher.modifierSafetyInterval = 0.35
 spoon.WindowSwitcher.redrawCoalesceSeconds = 0.05
 spoon.WindowSwitcher.mouseActivationDistance = 6
 spoon.WindowSwitcher.focusReassertDelay = 0.12
+spoon.WindowSwitcher.snapshotBudgetSeconds = 0.045
 ```
+
+### Temps de la premiere ouverture
+
+`hs.window.snapshotForID` est synchrone. Capturer douze tuiles avant le
+premier affichage, c'est le temps de fabrication que l'on ressent a la
+premiere ouverture, quand aucun cache n'est encore chaud.
+
+`snapshotBudgetSeconds` borne ce que l'on s'autorise avant d'afficher.
+Les tuiles sont rechauffees en partant de la selection, puis de proche
+en proche : si le budget ne suffit pas, ce n'est jamais la tuile qu'on
+regarde qui attend. Les autres arrivent au rendu suivant, sans bloquer.
+
+L'augmenter donne plus de vignettes reelles des la premiere image, au
+prix d'une ouverture plus lente ; le reduire fait apparaitre l'icone de
+l'application le temps d'un rendu.
+
+### Mesurer
+
+```lua
+spoon.WindowSwitcher:benchmark()
+```
+
+Construit une session complete sans l'afficher et detaille dans la
+console le temps de chaque etape : collecte, geometrie, captures, rendu.
+Le cache est vide d'office, pour reproduire la premiere ouverture ;
+`benchmark(false)` le conserve.
 
 ### Le levier principal
 

@@ -177,25 +177,83 @@ R.section("Chemins de capture : le visible ne dérange pas le service")
 ------------------------------------------------------------
 reset()
 obj.instantVisibleSnapshots = true
+obj.snapshotBudgetSeconds = 10          -- budget large : tout doit passer
 ctl.snapshotIDs = {}
-local visible = descriptor(30)
-local img = obj:windowSnapshot(visible)
-R.check("capture immédiate par le WindowServer", ctl.snapshotIDs[30], 1)
-R.check("image renvoyée sur-le-champ", img ~= nil, true)
+obj.entries = { descriptor(30), descriptor(31), descriptor(32) }
+obj.selectedIndex = 1
+obj:warmSnapshots(1, 3)
+R.check("les trois sont capturées par le WindowServer",
+    (ctl.snapshotIDs[30] or 0) + (ctl.snapshotIDs[31] or 0) + (ctl.snapshotIDs[32] or 0), 3)
 R.check("aucune requête au service", #ctl.launchedApps, 0)
+R.check("l'image est ensuite disponible", obj:windowSnapshot(obj.entries[1]) ~= nil, true)
 
-R.section("Le cache évite une seconde capture")
-obj:windowSnapshot(visible)
-R.check("toujours une seule capture", ctl.snapshotIDs[30], 1)
-
-R.section("Une fenêtre réduite passe par le service")
+R.section("windowSnapshot ne capture plus lui-même")
 reset()
 ctl.snapshotIDs = {}
-local reduite = descriptor(31, { minimized = true })
-R.check("rien à afficher tout de suite", obj:windowSnapshot(reduite), nil)
-R.check("le WindowServer n'est pas sollicité", ctl.snapshotIDs[31], nil)
-R.check("le service est sollicité", obj.runningScreenCaptures[31] ~= nil, true)
+R.check("rien en cache, rien renvoyé", obj:windowSnapshot(descriptor(33)), nil)
+R.check("le WindowServer n'est pas sollicité par le rendu", ctl.snapshotIDs[33], nil)
 
+R.section("Le cache évite une seconde capture")
+reset()
+ctl.snapshotIDs = {}
+obj.snapshotBudgetSeconds = 10
+obj.entries = { descriptor(34) }
+obj.selectedIndex = 1
+obj:warmSnapshots(1, 1)
+obj.entries[1].snapshotAttempted = nil
+obj:warmSnapshots(1, 1)
+R.check("toujours une seule capture", ctl.snapshotIDs[34], 1)
+
+R.section("Le budget borne ce qu'on capture avant d'afficher")
+reset()
+ctl.snapshotIDs = {}
+obj.snapshotBudgetSeconds = 0            -- budget épuisé d'entrée
+obj.entries = { descriptor(35), descriptor(36), descriptor(37) }
+obj.selectedIndex = 1
+obj.redrawTimer = nil
+obj:warmSnapshots(1, 3)
+local faites = 0
+for _, id in ipairs({35, 36, 37}) do faites = faites + (ctl.snapshotIDs[id] or 0) end
+R.check("aucune capture au-delà du budget", faites, 0)
+R.check("un rendu de rattrapage est programmé", obj.redrawTimer ~= nil, true)
+obj.snapshotBudgetSeconds = 0.045
+
+R.section("La tuile sélectionnée est servie en premier")
+local ordre = obj:warmOrder(1, 5, 3)
+R.check("commence par la sélection", ordre[1], 3)
+R.check("puis la voisine de droite", ordre[2], 4)
+R.check("puis celle de gauche", ordre[3], 2)
+R.check("toutes les tuiles sont couvertes", #ordre, 5)
+R.check("sélection hors page : on repart du début", obj:warmOrder(4, 6, 1)[1], 4)
+
+R.section("Une fenêtre incapturable n'est tentée qu'une fois")
+reset()
+obj.snapshotBudgetSeconds = 10
+ctl.snapshotIDs = {}
+ctl.snapshotFails[38] = true
+obj.entries = { descriptor(38) }
+obj.selectedIndex = 1
+obj:warmSnapshots(1, 1)
+R.check("marquée comme tentée", obj.entries[1].snapshotAttempted, true)
+R.check("le service prend le relais", obj.runningScreenCaptures[38] ~= nil, true)
+obj.runningScreenCaptures = {}
+obj:warmSnapshots(1, 1)
+R.check("pas de seconde tentative synchrone", obj.runningScreenCaptures[38], nil)
+ctl.snapshotFails[38] = nil
+obj.snapshotBudgetSeconds = 0.045
+
+R.section("Une fenêtre réduite passe par le service, hors budget")
+reset()
+ctl.snapshotIDs = {}
+obj.snapshotBudgetSeconds = 0            -- même sans budget
+obj.entries = { descriptor(39, { minimized = true }) }
+obj.selectedIndex = 1
+obj:warmSnapshots(1, 1)
+R.check("le WindowServer n'est pas sollicité", ctl.snapshotIDs[39], nil)
+R.check("le service est sollicité", obj.runningScreenCaptures[39] ~= nil, true)
+obj.snapshotBudgetSeconds = 0.045
+
+------------------------------------------------------------
 R.section("Une capture qui échoue est mise en quarantaine")
 reset()
 obj.screenCaptureFailureCache[40] = 1000   -- vient d'échouer

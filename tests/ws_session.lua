@@ -247,9 +247,39 @@ R.check("cache d'icônes vidé", next(obj.iconCache), nil)
 R.check("session close", obj.entries, nil)
 R.check("eventtap relâché", obj.modifierTap, nil)
 
-R.section("Après stop, un start repart proprement")
-ctl.filtersCreated = 0
+R.section("Le canvas est alloué au démarrage, pas au premier switch")
 obj.isStarted = false
+obj.switcherCanvas = nil
+obj.hotkeyMapping = { forward = { {"alt"}, "tab" } }
+local canvasAvantStart = #ctl.canvases
+obj:start()
+R.check("canvas créé par start()", #ctl.canvases, canvasAvantStart + 1)
+R.check("mais pas affiché", ctl.canvases[#ctl.canvases].shown, false)
+local canvasDuStart = ctl.canvases[#ctl.canvases]
+nouvelleSession()
+obj:step(1)
+R.check("le premier switch réutilise le même", ctl.canvases[#ctl.canvases], canvasDuStart)
+R.check("et l'affiche", canvasDuStart.shown, true)
+obj:commit()
+
+R.section("benchmark mesure sans laisser de trace")
+nouvelleSession()
+obj:step(1)
+local avant = obj.entries
+local selAvant = obj.selectedIndex
+ctl.printed = {}
+obj:benchmark()
+local rapport = table.concat(ctl.printed, " | ")
+R.check("un rapport est journalisé", rapport:find("benchmark", 1, true) ~= nil, true)
+R.check("les phases sont détaillées", rapport:find("collecte", 1, true) ~= nil, true)
+R.check("session intacte", obj.entries, avant)
+R.check("sélection intacte", obj.selectedIndex, selAvant)
+obj:commit()
+
+R.section("Après stop, un start repart proprement")
+obj.isStarted = false
+obj:releaseWindowFilter()
+ctl.filtersCreated = 0
 obj.hotkeyMapping = { forward = { {"alt"}, "tab" }, backward = { {"alt","shift"}, "tab" } }
 obj:start()
 R.check("marqué démarré", obj.isStarted, true)
