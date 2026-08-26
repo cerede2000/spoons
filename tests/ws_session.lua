@@ -275,52 +275,40 @@ obj.previewOnKeyboard = true
 obj:step(1)
 R.check("rien n'est affiché dans l'instant", obj.previewVisible, false)
 R.check("un délai est armé", obj.previewTimer ~= nil, true)
-R.check("c'est le délai d'amorce", ctl.timers[#ctl.timers].delay, obj.previewDelay)
-R.check("l'amorce est nettement plus longue que l'enchaînement",
-    obj.previewDelay > obj.previewFollowDelay * 3, true)
+R.check("c'est le délai configuré", ctl.timers[#ctl.timers].delay, obj.previewDelay)
 ctl.fireOnly(obj.previewDelay)
 R.check("puis l'aperçu apparaît", obj.previewVisible, true)
 R.check("il vise la tuile sélectionnée", obj.previewIndex, obj.selectedIndex)
 
-R.section("Un parcours rapide n'en déclenche aucun")
-nouvelleSession()
+R.section("Le Tab suivant le fait disparaître aussitôt")
+ctl.now = ctl.now + 1
 obj:step(1)
-for _ = 1, 4 do
-    ctl.now = ctl.now + 0.1        -- plus court que le délai d'amorce
-    obj:step(1)
-end
-R.check("toujours rien à l'écran", obj.previewVisible, false)
-R.check("un seul délai en attente, réarmé à chaque saut",
-    obj.previewTimer ~= nil, true)
-obj:commit()
-
-R.section("Une fois lancé, l'enchaînement suit le regard")
-nouvelleSession()
-obj:step(1)
-ctl.fireOnly(obj.previewDelay)
-R.check("premier aperçu affiché", obj.previewVisible, true)
-ctl.now = ctl.now + 0.2            -- on enchaîne dans la foulée
-obj:step(1)
-R.check("masqué le temps de changer de cible", obj.previewVisible, false)
-R.check("le délai suivant est court",
-    ctl.timers[#ctl.timers].delay, obj.previewFollowDelay)
-ctl.fireOnly(obj.previewFollowDelay)
-R.check("réaffiché sur la nouvelle tuile", obj.previewVisible, true)
-
-R.section("Après un silence, on repasse par l'amorce")
-ctl.now = ctl.now + obj.previewWarmthSeconds + 1
-obj:hidePreview()
-ctl.now = ctl.now + obj.previewWarmthSeconds + 1
-obj:step(1)
-R.check("de nouveau le délai d'amorce",
+R.check("masqué sans attendre", obj.previewVisible, false)
+R.check("le délai repart entier, pas raccourci",
     ctl.timers[#ctl.timers].delay, obj.previewDelay)
 ctl.fireOnly(obj.previewDelay)
+R.check("réaffiché seulement après le délai complet", obj.previewVisible, true)
 
-R.section("Une nouvelle session repart froide")
-obj:commit()
+R.section("Un parcours rapide n'en laisse aucun à l'écran")
 nouvelleSession()
 obj:step(1)
-R.check("délai d'amorce", ctl.timers[#ctl.timers].delay, obj.previewDelay)
+ctl.fireOnly(obj.previewDelay)
+R.check("un premier aperçu est bien là", obj.previewVisible, true)
+for _ = 1, 4 do
+    ctl.now = ctl.now + 0.1        -- plus court que le délai
+    obj:step(1)
+end
+R.check("il a disparu dès le premier saut, et rien ne revient",
+    obj.previewVisible, false)
+R.check("un délai reste armé pour l'arrêt", obj.previewTimer ~= nil, true)
+ctl.fireOnly(obj.previewDelay)
+R.check("il revient quand on s'arrête", obj.previewVisible, true)
+obj:commit()
+
+R.section("Une nouvelle session repart avec le même délai")
+nouvelleSession()
+obj:step(1)
+R.check("délai identique", ctl.timers[#ctl.timers].delay, obj.previewDelay)
 ctl.fireOnly(obj.previewDelay)
 
 R.section("Une capture qui arrive ne relance pas le compte à rebours")
@@ -367,7 +355,7 @@ ctl.fireOnly(obj.previewDelay)
 ctl.mousePosition = { x = 470, y = 350 }
 obj:handleMouseEvent("mouseMove", "tile:1")
 R.check("masqué le temps de changer de cible", obj.previewVisible, false)
-ctl.fireOnly(obj.previewFollowDelay)
+ctl.fireOnly(obj.previewDelay)
 R.check("réaffiché sur la tuile survolée", obj.previewVisible, true)
 R.check("sur la bonne tuile", obj.previewIndex, 1)
 obj:commit()

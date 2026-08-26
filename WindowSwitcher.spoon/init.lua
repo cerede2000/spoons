@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.10.1"
+obj.version = "0.10.2"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -224,19 +224,11 @@ obj.snapshotBudgetSeconds = 0.045
 -- premier plan et que l'apercu se confond avec elle.
 obj.enableWindowPreview = true
 
--- Temps d'arret avant le premier apercu d'une session. Assez long pour
--- qu'un parcours rapide de la grille n'en declenche aucun.
+-- Temps d'arret avant qu'un apercu apparaisse. Il est remis a zero a
+-- chaque changement de tuile : tant qu'on parcourt la grille, rien ne
+-- s'affiche, et l'apercu deja visible disparait aussitot. Il ne revient
+-- que lorsqu'on s'arrete pour de bon.
 obj.previewDelay = 0.65
-
--- Une fois qu'un apercu a ete montre, on est en train de comparer des
--- fenetres : les suivants doivent suivre le regard. C'est le
--- comportement des infobulles du systeme, un delai d'amorce puis un
--- enchainement rapide.
-obj.previewFollowDelay = 0.14
-
--- Au-dela de ce silence, la session redevient une exploration et le
--- delai d'amorce s'applique de nouveau.
-obj.previewWarmthSeconds = 1.5
 
 obj.previewOnKeyboard = true
 
@@ -471,8 +463,6 @@ obj.previewTimer = nil
 obj.previewIndex = nil
 
 obj.previewVisible = false
-
-obj.previewShownAt = nil
 
 obj.selectionFromMouse = false
 
@@ -4574,10 +4564,6 @@ function obj:beginSession(direction)
         nil
 
 
-    self.previewShownAt =
-        nil
-
-
     self.selectionFromMouse =
         false
 
@@ -4679,9 +4665,6 @@ function obj:commit()
         nil
 
     self.previewIndex =
-        nil
-
-    self.previewShownAt =
         nil
 
 
@@ -5167,10 +5150,6 @@ function obj:showPreview()
         true
 
 
-    self.previewShownAt =
-        timer.secondsSinceEpoch()
-
-
     return self
 
 end
@@ -5189,13 +5168,6 @@ function obj:hidePreview()
 
         end)
 
-
-        -- L'instant de reference est celui ou l'apercu quitte l'ecran :
-        -- c'est de la qu'on mesure le silence.
-
-        self.previewShownAt =
-            timer.secondsSinceEpoch()
-
     end
 
 
@@ -5204,35 +5176,6 @@ function obj:hidePreview()
 
 
     return self
-
-end
-
-
--- Delai d'amorce, ou delai d'enchainement si un apercu vient d'etre
--- montre. Sans cette distinction, comparer trois fenetres coute trois
--- fois le delai d'amorce, ce qui donne un switcher qui traine.
-
-function obj:currentPreviewDelay()
-
-    if not self.previewShownAt then
-
-        return self.previewDelay
-
-    end
-
-
-    local since =
-        timer.secondsSinceEpoch() - self.previewShownAt
-
-
-    if since > self.previewWarmthSeconds then
-
-        return self.previewDelay
-
-    end
-
-
-    return self.previewFollowDelay
 
 end
 
@@ -5331,7 +5274,7 @@ function obj:notePreviewTarget()
 
     self.previewTimer =
         timer.doAfter(
-            self:currentPreviewDelay(),
+            self.previewDelay,
             function()
 
                 self.previewTimer =
