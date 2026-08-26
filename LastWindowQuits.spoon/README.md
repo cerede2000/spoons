@@ -129,3 +129,28 @@ Ajouter BetterCmdTab dans `ignored-bundles.txt` evite que LWQ tente de quitter B
 ```text
 pro.bettercmdtab.BetterCmdTab
 ```
+
+## Applications a fenetres transitoires
+
+Hammerspoon tient sa propre liste d'applications dont les fenetres sont
+transitoires — Spotlight, le Centre de notifications, `loginwindow`, les
+menulets — et s'en sert pour batir `hs.window.filter.default`.
+
+Ce Spoon utilise `hs.window.filter.new(true)`, un filtre qui laisse tout
+passer, et se privait donc de ce savoir. Le panneau de recherche de
+Spotlight etait compte comme une fenetre ordinaire : chaque fois qu'on
+le refermait, Spotlight etait vu comme ayant perdu sa derniere fenetre,
+et quitte. `Commande + Espace` n'affichait alors plus rien.
+
+Depuis la 1.8.0 cette liste est reprise. Ce n'est pas une exception de
+plus : c'est cesser d'ignorer celle que la plateforme fournit deja.
+
+```lua
+spoon.LastWindowQuits.honourTransientWindowApps = false   -- revenir en arriere
+```
+
+Pour relancer Spotlight s'il a ete quitte :
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.apple.Spotlight
+```

@@ -154,6 +154,7 @@ function M.install(opts)
                 return { _snapshot = id }
             end,
             filter = setmetatable({
+            ignoreInDefaultFilter = { Spotlight = true, ["Notification Center"] = true },
             new = function(arg) local f = { events = {}, predicate = (type(arg)=="function") and arg or nil }
                 ctl.filtersCreated = ctl.filtersCreated + 1
                 f.subscribe = function(_, e, cb) f.events[e] = cb; ctl.windowFilterEvents[e] = cb; return f end

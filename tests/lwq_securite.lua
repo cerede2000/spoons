@@ -107,4 +107,34 @@ for _, e in ipairs({"activated","deactivated","hidden","unhidden"}) do
 end
 R.check("événements sans intérêt : rien interrogé", #ctl.deadCalls, 0)
 
+------------------------------------------------------------
+R.section("Les applications à fenêtres transitoires ne sont jamais quittées")
+-- Hammerspoon classe Spotlight, le Centre de notifications et les
+-- menulets comme ayant des fenêtres transitoires, et les écarte de son
+-- filtre par défaut. Ce Spoon utilise un filtre qui laisse tout passer :
+-- sans reprendre cette liste, refermer le champ de recherche Spotlight
+-- était vu comme la fermeture de sa dernière fenêtre, et Spotlight était
+-- quitté.
+------------------------------------------------------------
+R.check("Spotlight est écarté",
+    obj:isAppBlacklisted({ name = "Spotlight", bundleID = "com.apple.Spotlight" }), true)
+R.check("le Centre de notifications aussi",
+    obj:isAppBlacklisted({ name = "Notification Center" }), true)
+R.check("une application ordinaire ne l'est pas",
+    obj:isAppBlacklisted({ name = "Safari", bundleID = "com.apple.Safari" }), false)
+
+R.check("le test isole bien ce motif",
+    obj:isTransientWindowApp({ name = "Spotlight" }), true)
+R.check("et ne se déclenche pas sur les autres",
+    obj:isTransientWindowApp({ name = "Safari" }), false)
+R.check("une application sans nom ne déclenche rien",
+    obj:isTransientWindowApp({ bundleID = "com.exemple" }), false)
+
+obj.honourTransientWindowApps = false
+R.check("désactivable",
+    obj:isTransientWindowApp({ name = "Spotlight" }), false)
+R.check("et alors Spotlight redevient candidate",
+    obj:isAppBlacklisted({ name = "Spotlight", bundleID = "com.apple.Spotlight" }), false)
+obj.honourTransientWindowApps = true
+
 R.finish()

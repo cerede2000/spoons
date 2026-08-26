@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.7.0"
+obj.version = "1.8.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -142,6 +142,19 @@ obj.windowRemovalRecheckDelay = 0.15
 
 
 obj.blacklistBundleIDs = {}
+
+-- Hammerspoon tient sa propre liste d'applications dont les fenetres
+-- sont transitoires : Spotlight, le Centre de notifications, les
+-- menulets. Elle sert a batir hs.window.filter.default.
+--
+-- Ce Spoon utilise hs.window.filter.new(true), un filtre qui laisse
+-- tout passer, et se privait donc de ce savoir. Consequence : le
+-- panneau de Spotlight etait compte comme une fenetre ordinaire, et
+-- chaque fois qu'on le refermait, Spotlight etait quitte.
+--
+-- Ce n'est pas une exception de plus : c'est cesser d'ignorer celle que
+-- la plateforme fournit deja.
+obj.honourTransientWindowApps = true
 
 
 obj.blacklistAppNames = {
@@ -1388,9 +1401,46 @@ function obj:resume()
 end
 
 
+-- Une application dont Hammerspoon sait que les fenetres sont
+-- transitoires ne doit jamais etre quittee parce qu'une fenetre s'est
+-- fermee : c'est precisement ce que ses fenetres font.
+
+function obj:isTransientWindowApp(appInfo)
+
+    if not self.honourTransientWindowApps then
+
+        return false
+
+    end
+
+
+    if not appInfo or not appInfo.name then
+
+        return false
+
+    end
+
+
+    local transient =
+        hs.window.filter and hs.window.filter.ignoreInDefaultFilter
+
+
+    return type(transient) == "table"
+        and transient[appInfo.name] == true
+
+end
+
+
 function obj:isAppBlacklisted(appInfo)
 
     if not appInfo then
+
+        return true
+
+    end
+
+
+    if self:isTransientWindowApp(appInfo) then
 
         return true
 
