@@ -205,9 +205,45 @@ Deux choses, et elles n'ont besoin d'aucune API privee :
 
 ```lua
 spoon.LastWindowQuits.quitConfirmations = 3
+spoon.LastWindowQuits.quitConfirmationSpacing = 2
 spoon.LastWindowQuits.undecidableGraceSeconds = 60
 ```
+
+### Une confirmation est un instant, pas un appel
+
+Six chemins distincts interrogent le comptage, et la fermeture d'une
+fenetre en declenche plusieurs d'affilee. Mesure sur une vraie session :
+
+```
+00:14:49  Fenetre fermee : IINA
+00:14:49  aucune fenetre vue, 1 confirmation(s) sur 3
+00:14:49  aucune fenetre vue, 2 confirmation(s) sur 3
+00:14:50  Quit programme pour IINA
+```
+
+Trois confirmations en une seconde. Compter les appels revenait donc a
+ne rien confirmer du tout : la garde tombait exactement dans le cas
+qu'elle devait couvrir, une salve pendant un aveuglement passager.
+
+`quitConfirmationSpacing` impose un ecart minimal entre deux
+confirmations retenues. Il reste sous la periode du scan de secours
+(5 s) pour que deux scans consecutifs comptent toujours pour deux
+confirmations : une fermeture reelle est conclue en une dizaine de
+secondes, une salve ne vaut qu'une seule voix.
+
+### Les etats indexes par pid sont effaces
+
+macOS reattribue les pid. Serie de zeros, horodatage et etat indecidable
+sont effaces a la fin de chaque application : sans cela une application
+fraichement lancee heritait de la serie d'une autre et pouvait etre
+fermee sur sa toute premiere observation.
+
+### Le journal reste lisible
 
 Le passage a l'etat indecidable n'est journalise qu'une fois, pas a
 chaque scan : une application posee sur un autre bureau ecrivait sinon
 une ligne toutes les cinq secondes, indefiniment.
+
+Les services auxiliaires — `IINA Networking`, `Contenu web IINA` — se
+taisent completement : un processus qui n'a jamais eu de fenetre ne peut
+pas en perdre une derniere, donc son decompte n'interesse personne.

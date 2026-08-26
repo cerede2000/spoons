@@ -7,6 +7,12 @@ local out = ctl.realPrint
 io.write = function(s) out((s:gsub("\n$",""))) end
 local W = lib.window
 
+-- Une confirmation n'est retenue que si la précédente est assez
+-- ancienne : le temps doit avancer entre deux observations.
+local function plusTard(n)
+    ctl.now = ctl.now + (n or 5)
+end
+
 local function fresh(names)
     ctl.runningApps = {}
     for _, n in ipairs(names) do
@@ -23,6 +29,8 @@ local function fresh(names)
     obj.windowTransitionFallbackEnabled=true; obj.windowTransitionScanInterval=5
     obj.blacklistBundleIDs={}; obj.blacklistAppNames={}
     obj.seenApps={}
+    obj.zeroStreak={}; obj.zeroStreakAt={}
+    obj.undecidable={}; obj.undecidableSince={}
     obj:createPowerWatcher()
     obj:scanWindowTransitions(true)
 end
@@ -68,7 +76,7 @@ fresh({"Edge","Firefox"})
 ctl.runningApps[1]._windows = {}
 -- il faut quitConfirmations observations à zéro pour conclure : un
 -- aveuglement passager de l'accessibilité ne doit pas suffire
-for _ = 1, obj.quitConfirmations do obj:scanWindowTransitions(false) end
+for _ = 1, obj.quitConfirmations do obj:scanWindowTransitions(false); plusTard() end
 ctl.fireTimers()
 R.check("une application fermée", #ctl.killed, 1)
 R.check("la bonne", ctl.killed[1], "Edge")
@@ -79,6 +87,17 @@ ctl.runningApps[1]._windows = {}
 obj:scanWindowTransitions(false)
 ctl.fireTimers()
 R.check("rien de fermé sur un seul zéro", #ctl.killed, 0)
+
+R.section("Une rafale de scans dans le même instant ne suffit pas non plus")
+-- Mesuré chez l'utilisateur : la fermeture d'une fenêtre déclenche
+-- plusieurs chemins d'analyse dans la même seconde. Si chacun comptait
+-- pour une confirmation, la garde ne protégeait de rien.
+fresh({"Edge","Firefox"})
+ctl.runningApps[1]._windows = {}
+for _ = 1, 20 do obj:scanWindowTransitions(false) end
+ctl.fireTimers()
+R.check("vingt scans instantanés ne ferment rien", #ctl.killed, 0)
+R.check("aucun quit armé", armed(), 0)
 
 R.section("AX en erreur : on ne conclut rien")
 fresh({"Edge","Firefox"})

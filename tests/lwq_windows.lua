@@ -9,6 +9,12 @@ obj.logToFile=false; obj.logFile="/dev/null"; obj.verboseLogging=false
 
 local W = lib.window
 
+-- Une confirmation n'est retenue que si la précédente est assez
+-- ancienne : le temps doit donc avancer entre deux observations.
+local function plusTard(n)
+    ctl.now = ctl.now + (n or 5)
+end
+
 R.section("isCountableWindow : une réduction n'est pas une fermeture")
 R.check("fenêtre normale visible",          obj:isCountableWindow(W{id=1}), true)
 R.check("fenêtre RÉDUITE (subrole perdu)",  obj:isCountableWindow(W{id=2, visible=false, standard=false}), true)
@@ -30,7 +36,8 @@ ctl.axMode="ok";     R.check("une fenêtre",              obj:countWindows(app),
 -- un zéro isolé ne conclut plus : il faut quitConfirmations observations
 ctl.axMode="vide"
 R.check("premier zéro : indécidable", obj:countWindows(app), nil)
-for _ = 2, obj.quitConfirmations - 1 do obj:countWindows(app) end
+for _ = 2, obj.quitConfirmations - 1 do plusTard(); obj:countWindows(app) end
+plusTard()
 R.check("aucune fenêtre, une fois confirmé : 0", obj:countWindows(app), 0)
 ctl.axMode="erreur"; R.check("AX muette : nil, pas 0",   obj:countWindows(app), nil)
 ctl.axMode="ok";     R.check("application absente : nil", obj:countWindows(nil), nil)
@@ -97,12 +104,25 @@ ctl.fireOnly(obj.windowRemovalRecheckDelay)
 for _ = 1, obj.quitConfirmations do
     obj.windowCounts = { ["com.t.notes"] = 1 }
     obj:scanWindowTransitions(false)
+    plusTard()
 end
 local armed, pending = 0, nil
 for _, p in pairs(obj.pendingQuits) do armed = armed + 1; pending = p end
 R.check("un seul quit armé", armed, 1)
-R.check("délai ancré sur la première détection", pending and pending.startedAt, 1000)
 R.check("pid mémorisé pour l'annulation", pending and pending.pid ~= nil, true)
+
+-- Le délai s'ancre sur la détection qui a conclu : les scans suivants
+-- ne doivent pas le repousser, sinon une application dont le comptage
+-- reste à zéro ne serait jamais fermée.
+local ancre = pending and pending.startedAt
+for _ = 1, 3 do
+    plusTard()
+    obj.windowCounts = { ["com.t.notes"] = 1 }
+    obj:scanWindowTransitions(false)
+end
+local encore = nil
+for _, p in pairs(obj.pendingQuits) do encore = p end
+R.check("délai ancré une fois pour toutes", encore and encore.startedAt, ancre)
 
 R.section("Coût du scan : deux vitesses")
 -- 3 applications avec fenêtres, 2 sans, 20 daemons
@@ -157,7 +177,7 @@ obj.seenApps={["com.safari"]=true}
 obj.startupGracePeriod=0; obj.startedAt=0; obj.quitDelay=5
 ctl.timers={}; ctl.killed={}
 -- le scan conclut au bout de quitConfirmations passages
-for _ = 1, obj.quitConfirmations do obj:scanWindowTransitions(false) end
+for _ = 1, obj.quitConfirmations do obj:scanWindowTransitions(false); plusTard() end
 local armed=0 for _ in pairs(obj.pendingQuits) do armed=armed+1 end
 R.check("fermeture détectée par un tick partiel", armed, 1)
 
@@ -190,7 +210,7 @@ R.check("comptage indécidable, pas zéro", obj:countWindows(surAutreEspace), ni
 local vraimentVide = lib.app(ctl, {
     name = "Vide", bundle = "com.exemple.vide", windows = {},
 })
-for _ = 1, obj.quitConfirmations - 1 do obj:countWindows(vraimentVide) end
+for _ = 1, obj.quitConfirmations - 1 do obj:countWindows(vraimentVide); plusTard() end
 R.check("une application réellement sans fenêtre compte zéro, une fois confirmé",
     obj:countWindows(vraimentVide), 0)
 
@@ -236,7 +256,9 @@ R.check("comptage normal", obj:countWindows(cible), 1)
 cible._windows = {}
 cible.mainWindow = function() return nil end
 R.check("premier zéro : indécidable", obj:countWindows(cible), nil)
+plusTard()
 R.check("deuxième zéro : toujours", obj:countWindows(cible), nil)
+plusTard()
 R.check("troisième zéro : conclu", obj:countWindows(cible), 0)
 
 R.section("Une fenêtre qui réapparaît remet la série à zéro")
@@ -244,6 +266,7 @@ cible._windows = { lib.window({ id = 1601 }) }
 R.check("comptage normal", obj:countWindows(cible), 1)
 R.check("série effacée", obj.zeroStreak[9100], nil)
 cible._windows = {}
+plusTard()
 R.check("il faut tout recommencer", obj:countWindows(cible), nil)
 
 R.section("La garde mainWindow tient toujours")
@@ -253,7 +276,7 @@ local ailleurs = lib.app(ctl, { name = "Claude", bundle = "com.anthropic.x",
                                 hiddenBySpace = lib.window({ id = 1700 }) })
 R.check("indécidable tant que la fenêtre principale répond",
     obj:countWindows(ailleurs), nil)
-for _ = 1, 5 do obj:countWindows(ailleurs) end
+for _ = 1, 5 do plusTard(); obj:countWindows(ailleurs) end
 R.check("et elle ne cède pas à la répétition", obj:countWindows(ailleurs), nil)
 
 R.section("Mais elle ne bloque pas indéfiniment")
@@ -271,12 +294,97 @@ obj.undecidableSince = {}
 obj.zeroStreak = {}
 local muette2 = lib.app(ctl, { name = "Muette", bundle = "com.z", windows = {}, pid = 9300 })
 muette2.mainWindow = function() return nil end
+obj.seenApps["com.z"] = true
 ctl.printed = {}
-for _ = 1, 2 do obj:countWindows(muette2) end
+for _ = 1, 2 do obj:countWindows(muette2); plusTard() end
 local lignes = 0
 for _, l in ipairs(ctl.printed) do
     if l:find("Comptage indecidable", 1, true) then lignes = lignes + 1 end
 end
 R.check("deux confirmations, deux motifs distincts, deux lignes", lignes, 2)
+
+
+------------------------------------------------------------
+R.section("Une salve d'appels ne vaut qu'une seule confirmation")
+-- Six chemins interrogent le comptage, et la fermeture d'une fenêtre en
+-- déclenche plusieurs d'affilée : mesuré chez l'utilisateur, IINA a
+-- consommé ses trois confirmations en une seconde. Compter les appels
+-- revenait à ne rien confirmer du tout.
+------------------------------------------------------------
+obj.undecidable = {}
+obj.undecidableSince = {}
+obj.zeroStreak = {}
+obj.zeroStreakAt = {}
+obj.quitConfirmations = 3
+obj.quitConfirmationSpacing = 2
+
+local salve = lib.app(ctl, { name = "Salve", bundle = "com.exemple.salve",
+                             windows = {}, pid = 9400 })
+salve.mainWindow = function() return nil end
+
+for _ = 1, 10 do obj:countWindows(salve) end
+R.check("dix appels dans le même instant : une confirmation",
+    obj.zeroStreak[9400], 1)
+R.check("et rien de conclu", obj:countWindows(salve), nil)
+
+plusTard(2)
+obj:countWindows(salve)
+R.check("le temps passe : deuxième confirmation", obj.zeroStreak[9400], 2)
+for _ = 1, 10 do obj:countWindows(salve) end
+R.check("nouvelle salve, toujours deux", obj.zeroStreak[9400], 2)
+
+plusTard(2)
+R.check("troisième confirmation espacée : conclu", obj:countWindows(salve), 0)
+
+R.section("Les services auxiliaires ne remplissent pas le journal")
+-- « IINA Networking », « Contenu web IINA » : des processus qui n'ont
+-- jamais eu de fenêtre et n'en perdront donc jamais une dernière.
+-- Aucun appelant ne conclut rien à leur sujet, mais ils écrivaient une
+-- ligne à chaque confirmation.
+obj.undecidable = {}
+obj.undecidableSince = {}
+obj.zeroStreak = {}
+obj.zeroStreakAt = {}
+local auxiliaire = lib.app(ctl, { name = "IINA Networking",
+                                  bundle = "com.colliderli.iina.net",
+                                  windows = {}, pid = 9500 })
+auxiliaire.mainWindow = function() return nil end
+obj.seenApps["com.colliderli.iina.net"] = nil
+ctl.printed = {}
+for _ = 1, 2 do obj:countWindows(auxiliaire); plusTard() end
+local bruit = 0
+for _, l in ipairs(ctl.printed) do
+    if l:find("Comptage indecidable", 1, true) then bruit = bruit + 1 end
+end
+R.check("aucune ligne pour un processus sans fenêtre", bruit, 0)
+R.check("mais la série est bien tenue", obj.zeroStreak[9500], 2)
+
+R.section("Un pid réattribué n'hérite pas de la série précédente")
+-- macOS réattribue les pid. Sans effacement à la fin d'une application,
+-- une application fraîchement lancée héritait de deux confirmations et
+-- pouvait être fermée sur une seule observation.
+obj.zeroStreak = {}
+obj.zeroStreakAt = {}
+obj.undecidable = {}
+obj.undecidableSince = {}
+local partante = lib.app(ctl, { name = "Partante", bundle = "com.exemple.p",
+                                windows = {}, pid = 9600 })
+partante.mainWindow = function() return nil end
+obj:countWindows(partante)
+plusTard()
+obj:countWindows(partante)
+R.check("deux confirmations accumulées", obj.zeroStreak[9600], 2)
+
+obj:onApplicationEvent(partante, hs.application.watcher.terminated)
+R.check("série effacée à la fin de l'application", obj.zeroStreak[9600], nil)
+R.check("horodatage effacé aussi", obj.zeroStreakAt[9600], nil)
+R.check("doute effacé aussi", obj.undecidableSince[9600], nil)
+
+local nouvelle = lib.app(ctl, { name = "Nouvelle", bundle = "com.exemple.n",
+                                windows = {}, pid = 9600 })
+nouvelle.mainWindow = function() return nil end
+plusTard()
+R.check("la nouvelle repart de zéro", obj:countWindows(nouvelle), nil)
+R.check("une seule confirmation", obj.zeroStreak[9600], 1)
 
 R.finish()

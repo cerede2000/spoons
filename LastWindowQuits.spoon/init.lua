@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.14.0"
+obj.version = "1.15.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -251,8 +251,23 @@ obj.seenApps =
 -- reelle est definitive. On demande donc plusieurs zeros de suite.
 obj.quitConfirmations = 3
 
+-- Ecart minimal entre deux confirmations, en secondes.
+--
+-- Une confirmation doit etre une observation independante, pas un
+-- appel de plus. Six chemins distincts interrogent le comptage, et
+-- une fermeture de fenetre en declenche plusieurs dans la meme
+-- seconde : sans cet ecart, une salve consommait les trois
+-- confirmations instantanement et la protection ne valait rien.
+--
+-- Reste sous la periode du scan de secours pour que deux scans
+-- consecutifs comptent toujours pour deux confirmations.
+obj.quitConfirmationSpacing = 2
+
 -- Zeros consecutifs observes, par processus.
 obj.zeroStreak = {}
+
+-- Instant de la derniere confirmation retenue, par processus.
+obj.zeroStreakAt = {}
 
 -- Applications actuellement indecidables, par processus. Sert a ne
 -- journaliser que les changements d'etat : sans cela, une application
@@ -1349,6 +1364,58 @@ function obj:markSeen(appInfo)
 end
 
 
+-- Vrai si cette application a deja ete vue avec au moins une fenetre.
+-- Distinct de hasSeen, qui repond toujours vrai quand le suivi
+-- restreint est desactive : ici la question est factuelle.
+
+-- Les trois tables ci-dessous sont indexees par pid. Sans effacement a
+-- la fin d'une application, elles grossissent indefiniment et, surtout,
+-- macOS reattribue les pid : une application fraichement lancee
+-- heritait alors de la serie de zeros d'une autre et pouvait etre
+-- fermee sur une seule observation.
+
+function obj:forgetProcessState(pid)
+
+    if not pid then
+
+        return self
+
+    end
+
+
+    self.zeroStreak[pid] =
+        nil
+
+
+    self.zeroStreakAt[pid] =
+        nil
+
+
+    self.undecidable[pid] =
+        nil
+
+
+    self.undecidableSince[pid] =
+        nil
+
+
+    return self
+
+end
+
+
+function obj:hasEverHadWindow(appInfo)
+
+    local key =
+        self:appKey(appInfo)
+
+
+    return (key
+        and self.seenApps[key] == true) or false
+
+end
+
+
 function obj:hasSeen(appInfo)
 
     if not self.trackOnlyAppsAfterWindowClose then
@@ -1989,6 +2056,10 @@ function obj:countWindows(application)
             self.zeroStreak[pid] =
                 nil
 
+
+            self.zeroStreakAt[pid] =
+                nil
+
         end
 
 
@@ -2063,42 +2134,76 @@ function obj:countWindows(application)
         end
 
 
-        -- Derniere ligne de defense, et la seule qui ne passe pas par
-        -- l'accessibilite : le WindowServer sait sur quels espaces se
-        -- trouve une fenetre donnee. Si l'une de celles qu'on avait
-        -- relevees existe encore quelque part, l'application n'a pas
-        -- perdu sa derniere fenetre, quoi qu'en dise l'accessibilite.
-
         -- Un zero isole ne prouve rien : l'accessibilite peut etre
         -- momentanement aveugle, ce qui arrive des qu'une autre
         -- application passe en plein ecran. Une fermeture reelle, elle,
         -- est definitive. On attend donc plusieurs zeros de suite.
+        --
+        -- Ces zeros doivent etre espaces dans le temps. Six chemins
+        -- appellent ce comptage, et la fermeture d'une fenetre en
+        -- declenche plusieurs d'affilee : compter les appels laissait
+        -- passer trois confirmations en une seconde, ce qui revenait a
+        -- ne rien confirmer du tout. On ne retient donc une nouvelle
+        -- confirmation que si la precedente est assez ancienne.
 
         if pid then
-
-            local serie =
-                (self.zeroStreak[pid] or 0) + 1
-
-
-            self.zeroStreak[pid] =
-                serie
-
 
             local requis =
                 math.max(1, tonumber(self.quitConfirmations) or 3)
 
 
+            local ecart =
+                math.max(0, tonumber(self.quitConfirmationSpacing) or 2)
+
+
+            local serie =
+                self.zeroStreak[pid] or 0
+
+
+            local precedente =
+                self.zeroStreakAt[pid]
+
+
+            if serie == 0
+                or not precedente
+                or (self:now() - precedente) >= ecart then
+
+                serie =
+                    serie + 1
+
+
+                self.zeroStreak[pid] =
+                    serie
+
+
+                self.zeroStreakAt[pid] =
+                    self:now()
+
+            end
+
+
             if serie < requis then
 
-                self:noteUndecidable(
-                    pid,
-                    nom,
-                    string.format(
-                        "aucune fenetre vue, %d confirmation(s) sur %d",
-                        serie,
-                        requis
+                -- Un processus qui n'a jamais eu de fenetre ne peut pas
+                -- en perdre une derniere : aucun appelant ne conclura
+                -- rien a son sujet. Compter pour lui est inoffensif,
+                -- l'annoncer noyait le journal sous les services
+                -- auxiliaires des applications surveillees.
+
+                if self:hasEverHadWindow(
+                    self:appInfoFromApplication(application)) then
+
+                    self:noteUndecidable(
+                        pid,
+                        nom,
+                        string.format(
+                            "aucune fenetre vue, %d confirmation(s) sur %d",
+                            serie,
+                            requis
+                        )
                     )
-                )
+
+                end
 
 
                 return nil
@@ -2111,6 +2216,10 @@ function obj:countWindows(application)
 
 
             self.undecidableSince[pid] =
+                nil
+
+
+            self.zeroStreakAt[pid] =
                 nil
 
         end
@@ -3316,6 +3425,9 @@ function obj:onApplicationEvent(application, eventType)
 
                 end
             )
+
+
+        self:forgetProcessState(ok and pid or nil)
 
 
         return self:cancelPendingQuitForPID(
@@ -5336,6 +5448,22 @@ function obj:stop()
 
     self.powerSuspended =
         false
+
+
+    self.zeroStreak =
+        {}
+
+
+    self.zeroStreakAt =
+        {}
+
+
+    self.undecidable =
+        {}
+
+
+    self.undecidableSince =
+        {}
 
 
     self:stopWindowTransitionFallback()
