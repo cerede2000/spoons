@@ -22,7 +22,7 @@ function M.install(opts)
         allWindows = {}, filterWindows = nil, filtersCreated = 0, filtersDeleted = 0,
         snapshotIDs = {}, snapshotFails = {}, tasks = {},
         files = {}, dirs = {}, removed = {}, launchedApps = {}, osExec = {},
-        links = {}, uid = 501,
+        links = {}, uid = 501, windowSpaces = {}, spacesBroken = false,
         focused = {}, unminimized = {}, unhidden = {},
     }
 
@@ -143,7 +143,16 @@ function M.install(opts)
                     return { start=function() end, stop=function() end } end },
                 { __index = function(_, k) return k end }),
         }, {}),
+        spaces = {
+            -- ctl.windowSpaces[id] = liste d'espaces. Absent = fenetre
+            -- disparue. ctl.spacesBroken simule une API indisponible.
+            windowSpaces = function(id)
+                if ctl.spacesBroken then error("hs.spaces indisponible") end
+                return ctl.windowSpaces[id]
+            end,
+        },
         window = {
+            frontmostWindow = function() return ctl.frontmostWindow end,
             allWindows = function() return ctl.allWindows end,
             focusedWindow = function() return ctl.focusedWindow end,
             _orderedwinids = function() return ctl.orderedIDs or {} end,

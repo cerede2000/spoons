@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.10.0"
+obj.version = "1.11.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -232,6 +232,18 @@ obj.ignoredBundlesFileEntries =
 obj.seenApps =
     {}
 
+
+-- Recoupement par les espaces. hs.spaces interroge le WindowServer et
+-- ne depend pas de l'accessibilite : c'est la seule source qui voit
+-- encore les fenetres d'une application posee sur un autre bureau.
+obj.useSpacesCrossCheck = true
+
+-- Identifiants des fenetres vues pour chaque processus, releves lors
+-- des comptages reussis. Ils servent a demander au WindowServer si une
+-- fenetre existe encore, quand l'accessibilite ne repond plus.
+obj.knownWindowIDs = {}
+
+obj.spacesAvailable = nil
 
 obj.windowCounts =
     {}
@@ -1749,6 +1761,146 @@ end
 -- paraissaient vides. Les appelants doivent traiter nil comme une
 -- absence d'information, jamais comme une autorisation de fermer.
 
+-- L'API des espaces s'appuie sur des fonctions privees du systeme :
+-- elle peut disparaitre d'une version de macOS a l'autre. On la sonde
+-- sur une fenetre dont on sait qu'elle existe, celle du premier plan.
+--
+-- Seul un succes est memorise : un echec peut n'etre que passager, et
+-- le retenir reviendrait a se priver du recoupement pour toujours.
+
+function obj:spacesCrossCheckAvailable()
+
+    if not self.useSpacesCrossCheck then
+
+        return false
+
+    end
+
+
+    if self.spacesAvailable == true then
+
+        return true
+
+    end
+
+
+    if not hs.spaces
+        or type(hs.spaces.windowSpaces) ~= "function" then
+
+        return false
+
+    end
+
+
+    local okWindow,
+          window =
+        pcall(
+            function()
+
+                return hs.window.frontmostWindow()
+
+            end
+        )
+
+
+    if not okWindow or not window then
+
+        return false
+
+    end
+
+
+    local okID,
+          id =
+        pcall(
+            function()
+
+                return window:id()
+
+            end
+        )
+
+
+    if not okID or not id then
+
+        return false
+
+    end
+
+
+    local okSpaces,
+          spaces =
+        pcall(hs.spaces.windowSpaces, id)
+
+
+    if okSpaces
+        and type(spaces) == "table"
+        and #spaces > 0 then
+
+        self.spacesAvailable =
+            true
+
+    end
+
+
+    return self.spacesAvailable == true
+
+end
+
+
+-- Renvoie vrai, faux, ou nil quand la question reste sans reponse.
+
+function obj:windowExistsAcrossSpaces(id)
+
+    if not id or not self:spacesCrossCheckAvailable() then
+
+        return nil
+
+    end
+
+
+    local ok,
+          spaces =
+        pcall(hs.spaces.windowSpaces, id)
+
+
+    if not ok or type(spaces) ~= "table" then
+
+        return nil
+
+    end
+
+
+    return #spaces > 0
+
+end
+
+
+function obj:applicationPID(application)
+
+    local ok,
+          pid =
+        pcall(
+            function()
+
+                return application:pid()
+
+            end
+        )
+
+
+    if ok then
+
+        return pid
+
+    end
+
+
+    return nil
+
+end
+
+
 function obj:countWindows(application)
 
     if not application then
@@ -1781,6 +1933,10 @@ function obj:countWindows(application)
         0
 
 
+    local identifiants =
+        {}
+
+
     for _, window in ipairs(windows or {}) do
 
         if self:isCountableWindow(window) then
@@ -1788,7 +1944,45 @@ function obj:countWindows(application)
             count =
                 count + 1
 
+
+            local okID,
+                  id =
+                pcall(
+                    function()
+
+                        return window:id()
+
+                    end
+                )
+
+
+            if okID and id then
+
+                identifiants[#identifiants + 1] =
+                    id
+
+            end
+
         end
+
+    end
+
+
+    local pid =
+        self:applicationPID(application)
+
+
+    if count > 0 then
+
+        if pid then
+
+            self.knownWindowIDs[pid] =
+                identifiants
+
+        end
+
+
+        return count
 
     end
 
@@ -1852,6 +2046,42 @@ function obj:countWindows(application)
 
 
             return nil
+
+        end
+
+
+        -- Derniere ligne de defense, et la seule qui ne passe pas par
+        -- l'accessibilite : le WindowServer sait sur quels espaces se
+        -- trouve une fenetre donnee. Si l'une de celles qu'on avait
+        -- relevees existe encore quelque part, l'application n'a pas
+        -- perdu sa derniere fenetre, quoi qu'en dise l'accessibilite.
+
+        for _, id in ipairs((pid and self.knownWindowIDs[pid]) or {}) do
+
+            if self:windowExistsAcrossSpaces(id) == true then
+
+                self:log(
+                    "Comptage indecidable pour "
+                    .. tostring(self:appDisplayName(
+                        self:appInfoFromApplication(application)))
+                    .. " : le WindowServer voit encore la fenetre "
+                    .. tostring(id)
+                    .. " sur un autre bureau",
+                    true
+                )
+
+
+                return nil
+
+            end
+
+        end
+
+
+        if pid then
+
+            self.knownWindowIDs[pid] =
+                nil
 
         end
 

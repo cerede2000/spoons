@@ -206,4 +206,65 @@ local muette = lib.app(ctl, { name = "Muette", bundle = "com.y", windows = {} })
 muette.mainWindow = function() error("AX muette") end
 R.check("indécidable plutôt que zéro", obj:countWindows(muette), nil)
 
+
+------------------------------------------------------------
+R.section("Le WindowServer voit ce que l'accessibilité ne voit plus")
+-- Dernier recours, et le seul qui ne passe pas par l'accessibilité :
+-- hs.spaces.windowSpaces() dit sur quels bureaux se trouve une fenêtre
+-- donnée. Il reste debout quand allWindows() et mainWindow() se taisent
+-- tous les deux, ce qui arrive quand une autre application est en plein
+-- écran.
+------------------------------------------------------------
+local sonde = lib.window({ id = 1 })
+ctl.frontmostWindow = sonde
+ctl.windowSpaces = { [1] = { 1 } }          -- la sonde existe
+obj.spacesAvailable = nil
+
+local ailleurs = lib.app(ctl, { name = "Notes", bundle = "com.apple.Notes",
+                                windows = { lib.window({ id = 700 }) }, pid = 7000 })
+R.check("comptage normal, identifiants relevés", obj:countWindows(ailleurs), 1)
+R.check("l'identifiant est mémorisé", obj.knownWindowIDs[7000][1], 700)
+
+-- l'application passe sur un autre bureau : plus rien côté accessibilité
+ailleurs._windows = {}
+ailleurs.mainWindow = function() return nil end
+ctl.windowSpaces[700] = { 3 }               -- mais le WindowServer la voit
+R.check("indécidable, pas zéro", obj:countWindows(ailleurs), nil)
+
+R.section("Une fenêtre réellement fermée compte bien zéro")
+ctl.windowSpaces[700] = nil                 -- le WindowServer ne la voit plus
+R.check("zéro", obj:countWindows(ailleurs), 0)
+R.check("l'identifiant périmé est oublié", obj.knownWindowIDs[7000], nil)
+
+R.section("Sans identifiants relevés, rien à recouper")
+local jamaisVue = lib.app(ctl, { name = "Neuve", bundle = "com.x",
+                                 windows = {}, pid = 7001 })
+jamaisVue.mainWindow = function() return nil end
+R.check("zéro", obj:countWindows(jamaisVue), 0)
+
+R.section("Une API d'espaces absente ne bloque pas le comptage")
+ctl.spacesBroken = true
+obj.spacesAvailable = nil
+local autre = lib.app(ctl, { name = "Autre", bundle = "com.y",
+                             windows = { lib.window({ id = 800 }) }, pid = 7002 })
+obj:countWindows(autre)
+autre._windows = {}
+autre.mainWindow = function() return nil end
+R.check("zéro conservé", obj:countWindows(autre), 0)
+ctl.spacesBroken = false
+
+R.section("Le recoupement se désactive")
+obj.useSpacesCrossCheck = false
+obj.spacesAvailable = nil
+R.check("plus de sondage", obj:spacesCrossCheckAvailable(), false)
+obj.useSpacesCrossCheck = true
+
+R.section("Un échec de sondage n'est pas retenu définitivement")
+obj.spacesAvailable = nil
+ctl.frontmostWindow = nil
+R.check("indisponible pour l'instant", obj:spacesCrossCheckAvailable(), false)
+R.check("rien n'est gravé", obj.spacesAvailable, nil)
+ctl.frontmostWindow = sonde
+R.check("disponible dès que la sonde répond", obj:spacesCrossCheckAvailable(), true)
+
 R.finish()

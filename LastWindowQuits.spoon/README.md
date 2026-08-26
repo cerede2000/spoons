@@ -154,3 +154,40 @@ Pour relancer Spotlight s'il a ete quitte :
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.apple.Spotlight
 ```
+
+## Bureaux et plein ecran
+
+Quand une application passe en plein ecran, elle prend son propre
+bureau. Toutes les autres se retrouvent sur d'autres bureaux, et
+`app:allWindows()` renvoie alors une liste **vide** pour elles.
+`hs.window.filter` le dit dans son propre code :
+
+> *windows on a different space aren't picked up by `:allWindows()` at
+> first refresh*
+
+Ce zero etait lu comme « derniere fenetre fermee », et l'application
+etait quittee sans que personne n'ait rien ferme. Trois barrieres le
+retiennent desormais, de la moins chere a la plus sure :
+
+1. **`mainWindow()`** — la voie qu'emprunte Hammerspoon lui-meme pour
+   rattraper ce cas. Tant qu'elle repond, un zero ne prouve rien.
+
+2. **Le WindowServer** — `hs.spaces.windowSpaces()` dit sur quels
+   bureaux se trouve une fenetre donnee, **sans passer par
+   l'accessibilite**. Les identifiants des fenetres vues sont releves a
+   chaque comptage reussi ; si l'un d'eux existe encore quelque part,
+   l'application n'a pas perdu sa derniere fenetre.
+
+3. **Le comptage rend `nil`** plutot que zero des qu'une de ces voies
+   dit le contraire. Un quit deja programme est annule a l'execution :
+   « comptage des fenetres indisponible ».
+
+L'API des espaces s'appuie sur des fonctions privees du systeme. Elle
+est sondee sur une fenetre dont on sait qu'elle existe, celle du premier
+plan ; seul un succes est memorise, un echec pouvant n'etre que
+passager. Si elle disparait d'une version de macOS, seule la deuxieme
+barriere tombe.
+
+```lua
+spoon.LastWindowQuits.useSpacesCrossCheck = false
+```
