@@ -226,7 +226,8 @@ function M.install(opts)
             t.start = function() t.started = true; table.insert(ctl.tasks, t)
                 if cmd == "/usr/bin/open" then table.insert(ctl.launchedApps, args) end
                 return true end
-            t.terminate = function() t.terminated = true end
+            t.terminate = function() t.terminated = true; t.started = false end
+            t.isRunning = function() return t.started and not t.terminated end
             return t end },
         openConsole = function() end,
         reload = function() end,

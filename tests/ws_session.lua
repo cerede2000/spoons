@@ -322,6 +322,31 @@ R.check("désactivées : aucune pastille",
     #obj:stateBadges({ id = 5, minimized = true }), 0)
 obj.showStateBadges = true
 
+R.section("Pastilles son et micro")
+obj.audioPIDs = { [4242] = true }
+obj.microphonePIDs = { [777] = true }
+R.check("application qui joue : pastille son",
+    obj:stateBadges({ id = 8, pid = 4242 })[1], obj.badgeAudio)
+R.check("application qui capte : pastille micro",
+    obj:stateBadges({ id = 9, pid = 777 })[1], obj.badgeMicrophone)
+R.check("une autre application : rien",
+    #obj:stateBadges({ id = 10, pid = 1 }), 0)
+R.check("sans pid : rien",
+    #obj:stateBadges({ id = 11 }), 0)
+R.check("réduite et sonore : deux pastilles",
+    #obj:stateBadges({ id = 12, pid = 4242, minimized = true }), 2)
+R.check("l'état de fenêtre passe avant le son",
+    obj:stateBadges({ id = 13, pid = 4242, minimized = true })[1], obj.badgeMinimized)
+
+obj.showAudioBadges = false
+R.check("pastilles son désactivables séparément",
+    #obj:stateBadges({ id = 14, pid = 4242 }), 0)
+R.check("celles d'état restent",
+    #obj:stateBadges({ id = 15, pid = 4242, minimized = true }), 1)
+obj.showAudioBadges = true
+obj.audioPIDs = {}
+obj.microphonePIDs = {}
+
 R.section("Les pastilles sont dessinées dans la tuile")
 local els = {}
 obj:badgeElements(els, { id = 6, minimized = true, hidden = true },

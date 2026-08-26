@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.12.0"
+obj.version = "0.13.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -131,6 +131,26 @@ obj.badgeGap = 4
 obj.badgeMinimized = "⤓"
 
 obj.badgeHidden = "⦸"
+
+-- Quelle application joue du son, laquelle capte le micro. L'inventaire
+-- vient du service, par l'API publique CoreAudio des objets de
+-- processus. Le demander maintient le service en vie une trentaine de
+-- secondes apres chaque switch : le couper si c'est de trop.
+obj.showAudioBadges = true
+
+obj.badgeAudio = "♪"
+
+obj.badgeMicrophone = "◉"
+
+-- "task" lance le service comme enfant de Hammerspoon : macOS attribue
+-- alors ses acces au processus responsable, c'est-a-dire Hammerspoon.
+-- Un autre processus qui lancerait le binaire serait responsable de
+-- lui-meme, donc sans autorisation de capture.
+--
+-- "open" est l'ancien comportement : le service est detache et porte sa
+-- propre identite TCC, donc invocable par n'importe quel processus du
+-- compte. A garder si l'attribution par parent ne fonctionne pas.
+obj.helperLaunchMode = "task"
 
 -- Echap ferme le switcher sans rien activer. Un eventtap plutot qu'un
 -- hs.hotkey : pendant un Option+Tab les modificateurs sont enfonces, et
@@ -556,6 +576,12 @@ obj.previewVisible = false
 obj.cachedUserID = nil
 
 obj.sessionKeyTap = nil
+
+obj.helperTask = nil
+
+obj.audioPIDs = {}
+
+obj.microphonePIDs = {}
 
 obj.selectionFromMouse = false
 
@@ -1173,6 +1199,14 @@ function obj:describeWindow(win)
 
 
     if application then
+
+        descriptor.pid =
+            safeCall(function()
+
+                return application:pid()
+
+            end)
+
 
         descriptor.bundleID =
             safeCall(function()
@@ -2649,19 +2683,25 @@ function obj:writeScreenCaptureRequest(job)
     end
 
 
-    self:removeFile(job.outputPath)
+    if job.outputPath then
+
+        self:removeFile(job.outputPath)
+
+    end
+
     self:removeFile(self:screenCaptureStatusPath(job))
 
 
     local payload =
         table.concat(
             {
-                "3",
+                "4",
                 tostring(job.token),
-                tostring(job.id),
-                tostring(job.outputPath),
-                tostring(job.pixelHeight),
-                tostring(job.appName or "Application"):gsub("[\r\n]", " "),
+                tostring(job.kind or "capture"),
+                tostring(job.windowID or 0),
+                tostring(job.outputPath or ""),
+                tostring(job.pixelHeight or 0),
+                tostring(job.appName or ""):gsub("[\r\n]", " "),
                 tostring(job.title or ""):gsub("[\r\n]", " "),
                 tostring(self.screenCaptureSessionSecret),
             },
@@ -2694,7 +2734,7 @@ function obj:readScreenCaptureStatus(job)
         splitLines(status, 5)
 
 
-    if lines[1] ~= "3"
+    if lines[1] ~= "4"
         or lines[2] ~= tostring(job.token)
         or not lines[3]
         or not lines[5] then
@@ -2717,6 +2757,29 @@ end
 
 
 function obj:screenCaptureHelperIsRunning()
+
+    if self.helperTask then
+
+        local running =
+            safeCall(function()
+
+                return self.helperTask:isRunning()
+
+            end)
+
+
+        if running == true then
+
+            return true
+
+        end
+
+
+        self.helperTask =
+            nil
+
+    end
+
 
     local applications =
         safeCall(function()
@@ -2753,6 +2816,21 @@ function obj:stopScreenCaptureHelperApp()
             application:kill()
 
         end)
+
+    end
+
+
+    if self.helperTask then
+
+        safeCall(function()
+
+            self.helperTask:terminate()
+
+        end)
+
+
+        self.helperTask =
+            nil
 
     end
 
@@ -2800,6 +2878,55 @@ function obj:startScreenCaptureHelperApp()
     if not appPath or not fs.attributes(appPath) then
 
         return false
+
+    end
+
+
+    -- Lance en enfant de Hammerspoon. macOS attribue les acces TCC au
+    -- processus responsable : le service herite alors de l'autorisation
+    -- de Hammerspoon au lieu d'en porter une propre, et le binaire
+    -- lance par un autre processus ne capture rien.
+
+    if tostring(self.helperLaunchMode) == "task" then
+
+        local helper =
+            self.screenCaptureHelperPath or self:defaultScreenCaptureHelperPath()
+
+
+        if not helper or not fs.attributes(helper) then
+
+            return false
+
+        end
+
+
+        local launched =
+            task.new(
+                helper,
+                nil,
+                {
+                    "--service",
+                    self.screenCaptureSessionDirectory,
+                }
+            )
+
+
+        if not launched or not launched:start() then
+
+            return false
+
+        end
+
+
+        self.helperTask =
+            launched
+
+
+        self.screenCaptureHelperAppStarted =
+            true
+
+
+        return true
 
     end
 
@@ -3063,7 +3190,11 @@ function obj:pollScreenCaptureRequests()
             self:removeFile(statusPath)
 
 
-            if state == "ok" and fs.attributes(job.outputPath) then
+            if job.kind == "audio" then
+
+                self:finishAudioJob(job, state, statusMessage)
+
+            elseif state == "ok" and fs.attributes(job.outputPath) then
 
                 local capturedImage =
                     image.imageFromPath(job.outputPath)
@@ -3090,6 +3221,24 @@ function obj:pollScreenCaptureRequests()
                 self:removeFile(statusPath)
 
 
+                if job.kind == "audio" then
+
+                    self.screenCaptureHelperAppStarted =
+                        false
+
+
+                    self:finishAudioJob(job, "error", "delai depasse")
+
+
+                    self:stopScreenCapturePollTimerIfIdle()
+                    self:drainScreenCaptureQueue()
+
+
+                    return self
+
+                end
+
+
                 -- Un depassement signifie presque toujours que le
                 -- service s'est arrete. On le note pour que la
                 -- prochaine capture le relance au lieu d'ecrire dans
@@ -3110,6 +3259,143 @@ function obj:pollScreenCaptureRequests()
 
     self:stopScreenCapturePollTimerIfIdle()
     self:drainScreenCaptureQueue()
+
+
+    return self
+
+end
+
+
+-- Inventaire du son : quelles applications jouent, lesquelles captent.
+-- Une seule demande par session, elle ne touche ni le disque ni
+-- ScreenCaptureKit cote service.
+
+function obj:queueAudioSnapshot()
+
+    if not self.showAudioBadges
+        or not self.screenCaptureHelperEnabled
+        or self.screenCaptureDisabledReason then
+
+        return self
+
+    end
+
+
+    if self.queuedScreenCaptures["audio"]
+        or self.runningScreenCaptures["audio"] then
+
+        return self
+
+    end
+
+
+    local helper =
+        self.screenCaptureHelperPath or self:defaultScreenCaptureHelperPath()
+
+
+    if not helper or not fs.attributes(helper) then
+
+        return self
+
+    end
+
+
+    if not self:createScreenCaptureSession() then
+
+        return self
+
+    end
+
+
+    self.queuedScreenCaptures["audio"] =
+        true
+
+
+    table.insert(
+        self.screenCaptureQueue,
+        {
+            id = "audio",
+            kind = "audio",
+            token = readRandomHex(16),
+        }
+    )
+
+
+    self:drainScreenCaptureQueue()
+
+
+    return self
+
+end
+
+
+-- Charge utile : "out=123,456;in=789".
+
+function obj:applyAudioSnapshot(payload)
+
+    local playing =
+        {}
+
+
+    local recording =
+        {}
+
+
+    local text =
+        tostring(payload or "")
+
+
+    for pid in tostring(text:match("out=([^;]*)") or ""):gmatch("%d+") do
+
+        playing[tonumber(pid)] =
+            true
+
+    end
+
+
+    for pid in tostring(text:match("in=([^;]*)") or ""):gmatch("%d+") do
+
+        recording[tonumber(pid)] =
+            true
+
+    end
+
+
+    self.audioPIDs =
+        playing
+
+
+    self.microphonePIDs =
+        recording
+
+
+    if self.entries then
+
+        self:scheduleRedraw()
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:finishAudioJob(job, state, message)
+
+    self.runningScreenCaptures[job.id] =
+        nil
+
+
+    if state == "ok" then
+
+        self:applyAudioSnapshot(message)
+
+    else
+
+        self:debug("Inventaire audio indisponible : " .. tostring(message))
+
+    end
 
 
     return self
@@ -3198,6 +3484,8 @@ function obj:queueScreenCapture(descriptor)
     local job =
         {
             id = id,
+            windowID = id,
+            kind = "capture",
             token = readRandomHex(16),
             pixelHeight = tostring(math.floor(self.screenCapturePixelHeight)),
             appName = descriptor.appName or "Application",
@@ -3895,6 +4183,26 @@ function obj:stateBadges(descriptor)
 
         badges[#badges + 1] =
             self.badgeHidden
+
+    end
+
+
+    if self.showAudioBadges and descriptor.pid then
+
+        if self.audioPIDs[descriptor.pid] then
+
+            badges[#badges + 1] =
+                self.badgeAudio
+
+        end
+
+
+        if self.microphonePIDs[descriptor.pid] then
+
+            badges[#badges + 1] =
+                self.badgeMicrophone
+
+        end
 
     end
 
@@ -5166,6 +5474,7 @@ function obj:beginSession(direction)
         false
 
 
+    self:queueAudioSnapshot()
     self:armMouseSelection()
     self:startModifierWatcher()
     self:startSessionKeyTap()
@@ -6234,6 +6543,12 @@ function obj:stop()
         {}
 
     self.captureFiles =
+        {}
+
+    self.audioPIDs =
+        {}
+
+    self.microphonePIDs =
         {}
 
     self.mouseArmed =

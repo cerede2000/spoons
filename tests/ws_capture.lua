@@ -29,6 +29,14 @@ local function descriptor(id, opts)
              hidden = opts.hidden == true, bundleID = "com.apple.Safari" }
 end
 
+local function lancements()
+    local n = #ctl.launchedApps
+    for _, t in ipairs(ctl.tasks) do
+        if t.cmd == HELPER then n = n + 1 end
+    end
+    return n
+end
+
 local function reset()
     obj.screenCaptureQueue = {}
     obj.queuedScreenCaptures = {}
@@ -43,6 +51,11 @@ local function reset()
     obj.screenCaptureSessionDirectory = nil
     obj.entries = nil
     ctl.launchedApps = {}
+    ctl.tasks = {}
+    obj.helperTask = nil
+    obj.audioPIDs = {}
+    obj.microphonePIDs = {}
+    obj.helperLaunchMode = "task"
     ctl.runningApps = { helperApp }
     helperApp._dead = false
 end
@@ -52,13 +65,22 @@ R.section("Le service est lancé à la première capture")
 ------------------------------------------------------------
 reset()
 obj:queueScreenCapture(descriptor(1, { minimized = true }))
-R.check("service lancé une fois", #ctl.launchedApps, 1)
-R.check("lancé en mode --service", ctl.launchedApps[1][5], "--service")
+R.check("service lancé une fois", lancements(), 1)
+R.check("lancé comme enfant de Hammerspoon", ctl.tasks[1].cmd, HELPER)
+R.check("en mode --service", ctl.tasks[1].args[1], "--service")
 R.check("une requête est en vol", obj.runningScreenCaptures[1] ~= nil, true)
 
 R.section("Il n'est pas relancé tant qu'il tourne")
 obj:queueScreenCapture(descriptor(2, { minimized = true }))
-R.check("toujours un seul lancement", #ctl.launchedApps, 1)
+R.check("toujours un seul lancement", lancements(), 1)
+
+R.section("Le mode détaché reste disponible")
+reset()
+obj.helperLaunchMode = "open"
+obj:queueScreenCapture(descriptor(1, { minimized = true }))
+R.check("lancé par open", #ctl.launchedApps, 1)
+R.check("avec --service", ctl.launchedApps[1][5], "--service")
+obj.helperLaunchMode = "task"
 
 ------------------------------------------------------------
 R.section("Le service qui s'est arrêté seul est relancé")
@@ -68,13 +90,14 @@ R.section("Le service qui s'est arrêté seul est relancé")
 ------------------------------------------------------------
 reset()
 obj:queueScreenCapture(descriptor(1, { minimized = true }))
-R.check("premier lancement", #ctl.launchedApps, 1)
+R.check("premier lancement", lancements(), 1)
+obj.helperTask.terminate()          -- le service s'est arrêté seul
 helperApp._dead = true
 ctl.runningApps = {}
 obj.runningScreenCaptures = {}
 obj.queuedScreenCaptures = {}
 obj:queueScreenCapture(descriptor(3, { minimized = true }))
-R.check("relancé après extinction du service", #ctl.launchedApps, 2)
+R.check("relancé après extinction du service", lancements(), 2)
 R.check("la capture repart", obj.runningScreenCaptures[3] ~= nil, true)
 
 R.section("Un dépassement de délai marque le service comme mort")
@@ -96,31 +119,32 @@ R.section("La requête respecte le protocole du helper")
 ------------------------------------------------------------
 reset()
 obj:createScreenCaptureSession()
-local job = { id = 7, token = "abc", pixelHeight = "420",
-              appName = "Mail", title = "Boîte" }
+local job = { id = 7, windowID = 7, kind = "capture", token = "abc",
+              pixelHeight = "420", appName = "Mail", title = "Boîte" }
 job.outputPath = obj:screenCaptureOutputPath(job)
 obj:writeScreenCaptureRequest(job)
 local payload = ctl.files[obj:screenCaptureRequestPath(job)].data
 local lignes = {}
 for l in payload:gmatch("[^\n]*") do table.insert(lignes, l) end
-R.check("version 3", lignes[1], "3")
+R.check("version 4", lignes[1], "4")
 R.check("jeton en deuxième ligne", lignes[2], "abc")
-R.check("identifiant de fenêtre", lignes[3], "7")
-R.check("secret de session en huitième ligne", lignes[8], obj.screenCaptureSessionSecret)
+R.check("nature de la demande", lignes[3], "capture")
+R.check("identifiant de fenêtre", lignes[4], "7")
+R.check("secret de session en neuvième ligne", lignes[9], obj.screenCaptureSessionSecret)
 R.check("le PNG est écrit sous captures/",
     job.outputPath:find(obj:screenCaptureCaptureDirectory(), 1, true) == 1, true)
 
 R.section("Un statut au mauvais secret est refusé")
 local statusPath = obj:screenCaptureStatusPath(job)
-ctl.files[statusPath] = { data = "3\nabc\nok\n\nmauvais-secret\n", mtime = 1 }
+ctl.files[statusPath] = { data = "4\nabc\nok\n\nmauvais-secret\n", mtime = 1 }
 local state, message = obj:readScreenCaptureStatus(job)
 R.check("état rejeté", state, "error")
 R.check("motif explicite", message, "jeton statut capture invalide")
 
-ctl.files[statusPath] = { data = "3\nautre-jeton\nok\n\n" .. obj.screenCaptureSessionSecret .. "\n", mtime = 1 }
+ctl.files[statusPath] = { data = "4\nautre-jeton\nok\n\n" .. obj.screenCaptureSessionSecret .. "\n", mtime = 1 }
 R.check("jeton étranger rejeté", (obj:readScreenCaptureStatus(job)), "error")
 
-ctl.files[statusPath] = { data = "3\nabc\nok\n\n" .. obj.screenCaptureSessionSecret .. "\n", mtime = 1 }
+ctl.files[statusPath] = { data = "4\nabc\nok\n\n" .. obj.screenCaptureSessionSecret .. "\n", mtime = 1 }
 R.check("statut valide accepté", (obj:readScreenCaptureStatus(job)), "ok")
 
 ------------------------------------------------------------
@@ -185,7 +209,7 @@ obj.selectedIndex = 1
 obj:warmSnapshots(1, 3)
 R.check("les trois sont capturées par le WindowServer",
     (ctl.snapshotIDs[30] or 0) + (ctl.snapshotIDs[31] or 0) + (ctl.snapshotIDs[32] or 0), 3)
-R.check("aucune requête au service", #ctl.launchedApps, 0)
+R.check("aucune requête au service", lancements(), 0)
 R.check("l'image est ensuite disponible", obj:windowSnapshot(obj.entries[1]) ~= nil, true)
 
 R.section("windowSnapshot ne capture plus lui-même")
@@ -275,6 +299,64 @@ obj:queueScreenCapture(descriptor(53, { minimized = true }))
 R.check("plus aucune mise en file", obj.runningScreenCaptures[53], nil)
 
 ------------------------------------------------------------
+R.section("Inventaire audio : quelle application joue, laquelle écoute")
+------------------------------------------------------------
+reset()
+obj.showAudioBadges = true
+obj:queueAudioSnapshot()
+local audio = obj.runningScreenCaptures["audio"]
+R.check("une demande d'inventaire part", audio ~= nil, true)
+R.check("elle est de nature audio", audio.job.kind, "audio")
+
+local lignes = {}
+for l in ctl.files[obj:screenCaptureRequestPath(audio.job)].data:gmatch("[^\n]*") do
+    table.insert(lignes, l)
+end
+R.check("nature transmise au service", lignes[3], "audio")
+R.check("aucun chemin de sortie demandé", lignes[5], "")
+R.check("aucune hauteur demandée", lignes[6], "0")
+
+R.section("La réponse est décodée")
+obj:applyAudioSnapshot("out=101,102;in=103")
+R.check("deux applications jouent", obj.audioPIDs[101] and obj.audioPIDs[102], true)
+R.check("une capte le micro", obj.microphonePIDs[103], true)
+R.check("celle qui joue ne capte pas", obj.microphonePIDs[101], nil)
+R.check("celle qui capte ne joue pas", obj.audioPIDs[103], nil)
+
+obj:applyAudioSnapshot("out=;in=")
+R.check("silence général : plus rien", next(obj.audioPIDs), nil)
+R.check("micro libre", next(obj.microphonePIDs), nil)
+
+obj:applyAudioSnapshot("n'importe quoi")
+R.check("charge illisible : rien plutôt qu'un faux positif",
+    next(obj.audioPIDs), nil)
+
+R.section("Une seule demande par session")
+reset()
+obj:queueAudioSnapshot()
+obj:queueAudioSnapshot()
+obj:queueAudioSnapshot()
+local combien = 0
+for _ in pairs(obj.runningScreenCaptures) do combien = combien + 1 end
+R.check("une seule en vol", combien, 1)
+
+R.section("Un inventaire qui échoue ne casse rien")
+reset()
+obj:queueAudioSnapshot()
+obj:applyAudioSnapshot("out=99;in=")
+obj:finishAudioJob({ id = "audio", kind = "audio" }, "error", "delai depasse")
+R.check("la demande est retirée", obj.runningScreenCaptures["audio"], nil)
+R.check("les pastilles précédentes restent", obj.audioPIDs[99], true)
+
+R.section("Désactivé, aucun inventaire n'est demandé")
+reset()
+obj.showAudioBadges = false
+obj:queueAudioSnapshot()
+R.check("rien en vol", obj.runningScreenCaptures["audio"], nil)
+R.check("aucun service lancé", lancements(), 0)
+obj.showAudioBadges = true
+
+------------------------------------------------------------
 R.section("Sécurité : l'emplacement des captures est vérifié")
 -- /tmp est inscriptible par tous. Sans contrôle, il suffisait de créer
 -- le répertoire de base avant nous pour lire toutes les captures.
@@ -330,7 +412,7 @@ R.check("aucun secret en mémoire", obj.screenCaptureSessionSecret, nil)
 R.check("motif enregistré", obj.screenCaptureDisabledReason, "emplacement de capture non sur")
 obj:queueScreenCapture(descriptor(60, { minimized = true }))
 R.check("plus aucune requête n'est écrite", obj.runningScreenCaptures[60], nil)
-R.check("aucun service n'est lancé", #ctl.launchedApps, 0)
+R.check("aucun service n'est lancé", lancements(), 0)
 
 R.section("Le répertoire de base est privé à l'utilisateur")
 R.check("il n'est pas dans /tmp partagé",

@@ -1,13 +1,20 @@
 import AppKit
+import CoreAudio
 import CoreGraphics
 import Foundation
 import ImageIO
 import ScreenCaptureKit
 
+enum RequestKind: String {
+    case capture
+    case audio
+}
+
 struct CaptureRequest {
     let token: String
+    let kind: RequestKind
     let windowID: CGWindowID
-    let outputURL: URL
+    let outputURL: URL?
     let pixelHeight: Int
     let appName: String
     let title: String
@@ -182,12 +189,26 @@ final class WindowCaptureHelper: NSObject, NSApplicationDelegate {
                 continue
             }
 
+            // L'inventaire audio ne touche ni ScreenCaptureKit ni le
+            // disque : on repond tout de suite, sans passer par une
+            // tache asynchrone.
+            if request.kind == .audio {
+                writeStatus(token: token, state: "ok", message: Self.audioSnapshot())
+                try? fileManager.removeItem(at: processingURL)
+                lastActivity = Date()
+                continue
+            }
+
             inFlight.insert(token)
 
             Task {
                 do {
+                    guard let outputURL = request.outputURL else {
+                        throw NSError(domain: "WindowCaptureHelper", code: 7,
+                                      userInfo: [NSLocalizedDescriptionKey: "missing output path"])
+                    }
                     let image = try await Self.capture(request)
-                    try Self.writePNG(image, to: request.outputURL)
+                    try Self.writePNG(image, to: outputURL)
 
                     await MainActor.run {
                         self.writeStatus(token: token, state: "ok", message: "")
@@ -223,11 +244,11 @@ final class WindowCaptureHelper: NSObject, NSApplicationDelegate {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
 
-        guard lines.count >= 8 else {
+        guard lines.count >= 9 else {
             return (nil, "bad request line count: \(lines.count)")
         }
 
-        guard lines[0] == "3" else {
+        guard lines[0] == "4" else {
             return (nil, "bad request version")
         }
 
@@ -235,19 +256,35 @@ final class WindowCaptureHelper: NSObject, NSApplicationDelegate {
             return (nil, "bad request token")
         }
 
-        guard let rawWindowID = UInt32(lines[2]) else {
-            return (nil, "bad window id")
-        }
-
-        guard let pixelHeight = Int(lines[4]) else {
-            return (nil, "bad pixel height")
-        }
-
-        guard lines[7] == session.secret else {
+        guard lines[8] == session.secret else {
             return (nil, "bad request token")
         }
 
-        let outputURL = URL(fileURLWithPath: lines[3])
+        guard let kind = RequestKind(rawValue: lines[2]) else {
+            return (nil, "bad request kind")
+        }
+
+        if kind == .audio {
+            return (CaptureRequest(
+                token: token,
+                kind: kind,
+                windowID: 0,
+                outputURL: nil,
+                pixelHeight: 0,
+                appName: "",
+                title: ""
+            ), nil)
+        }
+
+        guard let rawWindowID = UInt32(lines[3]) else {
+            return (nil, "bad window id")
+        }
+
+        guard let pixelHeight = Int(lines[5]) else {
+            return (nil, "bad pixel height")
+        }
+
+        let outputURL = URL(fileURLWithPath: lines[4])
 
         guard session.isPathInsideCaptureDirectory(outputURL) else {
             return (nil, "bad output path")
@@ -259,17 +296,18 @@ final class WindowCaptureHelper: NSObject, NSApplicationDelegate {
 
         return (CaptureRequest(
             token: token,
+            kind: kind,
             windowID: CGWindowID(rawWindowID),
             outputURL: outputURL,
             pixelHeight: pixelHeight,
-            appName: lines[5],
-            title: lines[6]
+            appName: lines[6],
+            title: lines[7]
         ), nil)
     }
 
     private func writeStatus(token: String, state: String, message: String) {
         let cleanMessage = Self.cleanStatusMessage(message)
-        let statusText = "3\n\(token)\n\(state)\n\(cleanMessage)\n\(session.secret)\n"
+        let statusText = "4\n\(token)\n\(state)\n\(cleanMessage)\n\(session.secret)\n"
         let statusURL = session.requestDirectory
             .appendingPathComponent(token)
             .appendingPathExtension("status")
@@ -292,6 +330,78 @@ final class WindowCaptureHelper: NSObject, NSApplicationDelegate {
         } catch {
             try? fileManager.removeItem(at: tmpURL)
         }
+    }
+
+    /// Quels processus produisent du son, et lesquels captent le micro.
+    ///
+    /// API publique CoreAudio des objets de processus, macOS 14.4+.
+    /// Lecture seule : les six proprietes exposees sont informatives, il
+    /// n'existe aucune coupure par application dans l'API publique.
+    ///
+    /// La camera n'a pas d'equivalent : CMIO expose les peripheriques,
+    /// pas l'application qui les utilise.
+    private static func audioProperty<T>(
+        _ object: AudioObjectID,
+        _ selector: AudioObjectPropertySelector,
+        _ fallback: T
+    ) -> T? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size = UInt32(MemoryLayout<T>.size)
+        var value = fallback
+
+        guard AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr else {
+            return nil
+        }
+
+        return value
+    }
+
+    private static func audioSnapshot() -> String {
+        guard #available(macOS 14.4, *) else { return "out=;in=" }
+
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+
+        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr,
+              size > 0
+        else {
+            return "out=;in="
+        }
+
+        var objects = [AudioObjectID](
+            repeating: 0,
+            count: Int(size) / MemoryLayout<AudioObjectID>.size
+        )
+
+        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &objects) == noErr else {
+            return "out=;in="
+        }
+
+        var playing: [String] = []
+        var recording: [String] = []
+
+        for object in objects {
+            guard let pid = audioProperty(object, kAudioProcessPropertyPID, pid_t(0)) else {
+                continue
+            }
+            if (audioProperty(object, kAudioProcessPropertyIsRunningOutput, UInt32(0)) ?? 0) != 0 {
+                playing.append(String(pid))
+            }
+            if (audioProperty(object, kAudioProcessPropertyIsRunningInput, UInt32(0)) ?? 0) != 0 {
+                recording.append(String(pid))
+            }
+        }
+
+        return "out=\(playing.joined(separator: ","));in=\(recording.joined(separator: ","))"
     }
 
     private static func cleaned(_ value: String) -> String {

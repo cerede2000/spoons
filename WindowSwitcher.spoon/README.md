@@ -91,6 +91,10 @@ spoon.WindowSwitcher.snapshotBudgetSeconds = 0.045
 spoon.WindowSwitcher.showStateBadges = true
 spoon.WindowSwitcher.badgeMinimized = "⤓"
 spoon.WindowSwitcher.badgeHidden = "⦸"
+spoon.WindowSwitcher.showAudioBadges = true
+spoon.WindowSwitcher.badgeAudio = "♪"
+spoon.WindowSwitcher.badgeMicrophone = "◉"
+spoon.WindowSwitcher.helperLaunchMode = "task"
 spoon.WindowSwitcher.enableCancelKey = true
 spoon.WindowSwitcher.enableWindowPreview = true
 spoon.WindowSwitcher.previewDelay = 0.65
@@ -100,12 +104,31 @@ spoon.WindowSwitcher.previewOnKeyboard = true
 ### Pastilles d'etat
 
 Une pastille dans le coin de la vignette signale une fenetre reduite
-(`⤓`) ou une application masquee par Cmd+H (`⦸`). L'information vient du
-descripteur deja construit pour filtrer la fenetre : la pastille ne
-coute qu'un element de dessin, aucune interrogation supplementaire.
+(`⤓`), une application masquee par Cmd+H (`⦸`), une application qui
+joue du son (`♪`) ou qui capte le micro (`◉`).
 
-Les deux glyphes sont configurables, et `showStateBadges = false` les
-retire.
+Les deux premieres viennent du descripteur deja construit pour filtrer
+la fenetre : elles ne coutent qu'un element de dessin.
+
+Les deux autres viennent du service, par l'API publique CoreAudio des
+objets de processus (`kAudioProcessPropertyIsRunningOutput` et
+`IsRunningInput`, macOS 14.4+). Une seule demande par session, qui ne
+touche ni le disque ni ScreenCaptureKit. La contrepartie est que le
+service reste en vie une trentaine de secondes apres chaque switch :
+`showAudioBadges = false` supprime la demande **et** les pastilles.
+
+**La camera n'a pas d'equivalent.** CMIO expose les peripheriques, pas
+l'application qui les utilise : macOS reserve cette attribution au
+voyant du Centre de controle. La contourner demanderait des API privees.
+
+**Couper le son d'une application n'est pas possible** par l'API
+publique. CoreAudio expose six proprietes par processus, toutes
+informatives, et aucune n'est modifiable. Les applications qui y
+parviennent installent un pilote audio virtuel, c'est-a-dire une
+extension systeme.
+
+Tous les glyphes sont configurables. `showStateBadges = false` retire
+les pastilles de fenetre.
 
 ### Annuler
 
@@ -284,21 +307,28 @@ motif est journalise.
 
 ### Portee de l'autorisation
 
-Le helper detient l'autorisation Enregistrement de l'ecran. Sur macOS,
-cette autorisation est attachee au binaire, et **tout processus tournant
-sous le meme compte peut lancer cette application** avec son propre
-repertoire de session. Le secret n'y change rien : il protege le
+Jusqu'a la 0.12.0 le service etait lance par `open -gj -n`, ce qui le
+**detache** : son processus responsable etait `launchd`, il portait donc
+sa propre identite TCC. N'importe quel processus du compte pouvait
+lancer cette application avec son propre repertoire de session et
+obtenir des captures. Le secret n'y changeait rien : il protege le
 repertoire d'une session contre une injection exterieure, pas contre un
 appelant qui fournit le sien.
 
-C'est une propriete du modele TCC, pas un defaut du protocole. La seule
-parade reelle serait un service XPC verifiant la signature de code de
-l'appelant, ce que Hammerspoon ne permet pas d'ecrire en Lua.
+Depuis la 0.13.0, `helperLaunchMode = "task"` lance le service comme
+**enfant de Hammerspoon**. macOS attribue les acces TCC au processus
+responsable : le service herite alors de l'autorisation de Hammerspoon
+au lieu d'en porter une propre. Un binaire lance par un autre processus
+est responsable de lui-meme, donc sans autorisation, donc sans capture.
 
-La surface est donc bornee au compte utilisateur : un autre compte de la
-machine n'a acces ni aux fichiers ni au service, mais un processus
-tournant sous votre compte obtient une capture d'ecran qu'il n'aurait
-pas eue autrement.
+```lua
+spoon.WindowSwitcher.helperLaunchMode = "open"   -- ancien comportement
+```
+
+Si les vignettes de fenetres reduites cessent de fonctionner apres la
+bascule, c'est que l'attribution par parent ne s'applique pas sur cette
+version de macOS : repasser en `"open"` et reaccorder l'autorisation au
+helper.
 
 ### Reconstruire le binaire
 
@@ -319,6 +349,15 @@ service, et journalise un avertissement si la source est plus recente :
 un durcissement ecrit dans le `.swift` ne doit pas donner l'illusion
 d'etre actif.
 
-**La 0.11.0 durcit la recherche de repli du helper** (correspondance
-exacte sur le nom d'application et le titre, les deux exiges). Cette
-correction n'est active qu'apres recompilation.
+Compiler avec `-parse-as-library`, le fichier utilisant `@main` :
+
+```bash
+swiftc -O -parse-as-library window-capture-helper.swift \
+  -o WindowSwitcherCapture.app/Contents/MacOS/window-capture-helper
+codesign --force --sign - \
+  --identifier local.hammerspoon.WindowSwitcherCapture WindowSwitcherCapture.app
+```
+
+Le protocole est passe en version 4 : le Spoon et le binaire doivent
+etre mis a jour ensemble, sinon toutes les requetes sont refusees avec
+`bad request version`.
