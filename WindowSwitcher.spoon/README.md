@@ -50,6 +50,7 @@ spoon.WindowSwitcher:start()
 - Fallback propre avec grande icone d'application centree si macOS refuse une capture.
 - Affichage immediat : les captures ScreenCaptureKit sont chargees en arriere-plan.
 - Selection souris : survol pour selectionner, clic pour activer directement la fenetre.
+- Apercu de la fenetre selectionnee, a sa taille et a sa place reelles, sous le panneau.
 - Restauration des fenetres minimisees avant focus.
 - Inclusion des fenetres minimisees et cachees par defaut.
 - Inclusion des autres Spaces par defaut, dans les limites des API macOS exposees a Hammerspoon.
@@ -84,7 +85,35 @@ spoon.WindowSwitcher.redrawCoalesceSeconds = 0.05
 spoon.WindowSwitcher.mouseActivationDistance = 6
 spoon.WindowSwitcher.focusReassertDelay = 0.12
 spoon.WindowSwitcher.snapshotBudgetSeconds = 0.045
+spoon.WindowSwitcher.enableWindowPreview = true
+spoon.WindowSwitcher.previewDelay = 0.3
+spoon.WindowSwitcher.previewOnKeyboard = true
 ```
+
+### Apercu de la fenetre
+
+Survoler une vignette, ou s'arreter dessus au clavier, redessine la
+fenetre selectionnee **a sa taille et a sa place reelles**, au-dessus
+des autres fenetres. Plus besoin de deviner laquelle se cache derriere
+laquelle.
+
+L'apercu s'affiche sous le panneau du switcher, jamais par-dessus : la
+grille reste lisible et cliquable. Un liseré aux couleurs de la
+selection le delimite, ce qui le rend visible meme lorsqu'il recouvre
+exactement une fenetre deja au premier plan.
+
+`previewDelay` est le temps d'arret avant apparition : il evite que
+l'apercu clignote quand on parcourt la grille rapidement. Mettre
+`previewOnKeyboard = false` reserve l'apercu au survol de la souris.
+
+Une fenetre dont le cadre depasse l'ecran est reduite en conservant ses
+proportions ; une fenetre sans cadre exploitable est centree.
+
+La finesse de l'apercu depend de la capture disponible. Les fenetres
+visibles sont capturees en pleine resolution par le WindowServer. Les
+fenetres reduites passent par le service, a la hauteur fixee par
+`screenCapturePixelHeight` (420 par defaut) : monter cette valeur donne
+un apercu plus net, au prix de captures plus lourdes.
 
 ### Temps de la premiere ouverture
 

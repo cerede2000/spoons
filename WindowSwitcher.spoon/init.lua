@@ -56,7 +56,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.9.1"
+obj.version = "0.10.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -217,6 +217,22 @@ obj.focusReassertDelay = 0.12
 -- a la premiere ouverture. On s'accorde ce budget, en commencant par la
 -- tuile selectionnee ; le reste arrive au rendu suivant.
 obj.snapshotBudgetSeconds = 0.045
+
+-- Apercu : la fenetre selectionnee est redessinee a sa taille et a sa
+-- place reelles, au-dessus des autres fenetres mais sous le panneau du
+-- switcher. Le liseré la rend visible meme lorsqu'elle est deja au
+-- premier plan et que l'apercu se confond avec elle.
+obj.enableWindowPreview = true
+
+obj.previewDelay = 0.3
+
+obj.previewOnKeyboard = true
+
+obj.previewMaxScreenRatio = 0.94
+
+obj.previewCornerRadius = 10
+
+obj.previewBorderWidth = 3
 
 obj.theme = "auto"
 
@@ -435,6 +451,16 @@ obj.captureFiles = {}
 obj.mouseArmed = false
 
 obj.mouseOrigin = nil
+
+obj.previewCanvas = nil
+
+obj.previewTimer = nil
+
+obj.previewIndex = nil
+
+obj.previewVisible = false
+
+obj.selectionFromMouse = false
 
 
 
@@ -3808,6 +3834,10 @@ function obj:handleMouseEvent(message, elementID)
 
         if self.selectedIndex ~= index then
 
+            self.selectionFromMouse =
+                true
+
+
             self.selectedIndex =
                 index
 
@@ -4206,6 +4236,7 @@ function obj:redraw()
 
 
     self:showCanvas(layout, elements)
+    self:notePreviewTarget()
 
 
     return self
@@ -4525,6 +4556,14 @@ function obj:beginSession(direction)
     end
 
 
+    self.previewIndex =
+        nil
+
+
+    self.selectionFromMouse =
+        false
+
+
     self:armMouseSelection()
     self:startModifierWatcher()
 
@@ -4549,6 +4588,10 @@ function obj:step(direction)
 
     self.lastStepAt =
         now
+
+
+    self.selectionFromMouse =
+        false
 
 
     if not self.entries then
@@ -4593,6 +4636,7 @@ function obj:commit()
 
     self:stopModifierWatcher()
     self:cancelPendingRedraw()
+    self:hidePreview()
     self:hideCanvas()
 
     self.entries =
@@ -4614,6 +4658,9 @@ function obj:commit()
         false
 
     self.mouseOrigin =
+        nil
+
+    self.previewIndex =
         nil
 
 
@@ -4705,6 +4752,535 @@ function obj:reassertFocus(selected)
 
         end
     )
+
+
+    return self
+
+end
+
+
+
+------------------------------------------------------------
+-- APERCU DE LA FENETRE SELECTIONNEE
+------------------------------------------------------------
+
+-- Cadre de l'apercu : la taille et la position reelles de la fenetre,
+-- reduites seulement si elles depassent l'ecran. Une fenetre sans cadre
+-- exploitable (reduite depuis longtemps, cadre illisible) est centree.
+
+function obj:previewGeometry(descriptor)
+
+    local screenFrame =
+        safeCall(function()
+
+            return screen.mainScreen():fullFrame()
+
+        end)
+        or safeCall(function()
+
+            return screen.mainScreen():frame()
+
+        end)
+
+
+    if not screenFrame then
+
+        return nil
+
+    end
+
+
+    local maxWidth =
+        screenFrame.w * self.previewMaxScreenRatio
+
+
+    local maxHeight =
+        screenFrame.h * self.previewMaxScreenRatio
+
+
+    local frame =
+        descriptor and descriptor.frame
+
+
+    local width,
+          height
+
+
+    if frame
+        and frame.w and frame.h
+        and frame.w > 1 and frame.h > 1 then
+
+        width =
+            frame.w
+
+
+        height =
+            frame.h
+
+    else
+
+        frame =
+            nil
+
+
+        width =
+            maxWidth
+
+
+        height =
+            maxHeight
+
+    end
+
+
+    local scale =
+        math.min(
+            1,
+            maxWidth / width,
+            maxHeight / height
+        )
+
+
+    width =
+        math.floor(width * scale)
+
+
+    height =
+        math.floor(height * scale)
+
+
+    local x,
+          y
+
+
+    if frame then
+
+        -- On garde le centre de la fenetre reelle : si elle tenait
+        -- deja a l'ecran, l'apercu se superpose exactement a elle.
+
+        x =
+            math.floor(frame.x + (frame.w - width) / 2)
+
+
+        y =
+            math.floor(frame.y + (frame.h - height) / 2)
+
+    else
+
+        x =
+            math.floor(screenFrame.x + (screenFrame.w - width) / 2)
+
+
+        y =
+            math.floor(screenFrame.y + (screenFrame.h - height) / 2)
+
+    end
+
+
+    x =
+        math.max(
+            screenFrame.x,
+            math.min(x, screenFrame.x + screenFrame.w - width)
+        )
+
+
+    y =
+        math.max(
+            screenFrame.y,
+            math.min(y, screenFrame.y + screenFrame.h - height)
+        )
+
+
+    return {
+        x = x,
+        y = y,
+        w = width,
+        h = height,
+    }
+
+end
+
+
+function obj:previewElements(geometry, snapshot)
+
+    local margin =
+        self.canvasPadding
+
+
+    local frame =
+        {
+            x = margin,
+            y = margin,
+            w = geometry.w,
+            h = geometry.h,
+        }
+
+
+    local elements =
+        {
+            {
+                type = "rectangle",
+                action = "fill",
+                frame = frame,
+                roundedRectRadii = rounded(self.previewCornerRadius),
+                fillColor = self:themeColor("backgroundColor"),
+                withShadow = true,
+                shadow = {
+                    blurRadius = 26,
+                    color = self:themeColor("shadowColor"),
+                    offset = {
+                        h = -12,
+                        w = 0,
+                    },
+                },
+            },
+        }
+
+
+    if snapshot then
+
+        table.insert(
+            elements,
+            {
+                type = "rectangle",
+                action = "clip",
+                frame = frame,
+                roundedRectRadii = rounded(self.previewCornerRadius),
+            }
+        )
+
+
+        table.insert(
+            elements,
+            {
+                type = "image",
+                frame = frame,
+                image = snapshot,
+                imageScaling = "scaleProportionally",
+                imageAlpha = 1,
+            }
+        )
+
+
+        table.insert(
+            elements,
+            {
+                type = "resetClip",
+            }
+        )
+
+    end
+
+
+    -- Le liseré est ce qui rend l'apercu lisible quand il recouvre
+    -- exactement la fenetre reelle.
+
+    table.insert(
+        elements,
+        {
+            type = "rectangle",
+            action = "stroke",
+            frame = frame,
+            roundedRectRadii = rounded(self.previewCornerRadius),
+            strokeColor = self:themeColor("selectedBorderColor"),
+            strokeWidth = self.previewBorderWidth,
+        }
+    )
+
+
+    return elements
+
+end
+
+
+function obj:createPreviewCanvas(rect)
+
+    if self.previewCanvas then
+
+        return self.previewCanvas
+
+    end
+
+
+    self.previewCanvas =
+        canvas.new(rect or { x = 0, y = 0, w = 1, h = 1 })
+
+
+    if not self.previewCanvas then
+
+        return nil
+
+    end
+
+
+    -- Au-dessus des fenetres ordinaires, sous le panneau du switcher :
+    -- l'apercu ne doit jamais masquer la grille ni intercepter ses
+    -- clics.
+
+    self.previewCanvas:level(canvas.windowLevels.floating)
+
+
+    safeCall(function()
+
+        self.previewCanvas:clickActivating(false)
+
+    end)
+
+
+    return self.previewCanvas
+
+end
+
+
+function obj:renderPreview()
+
+    local descriptor =
+        self.entries and self.entries[self.selectedIndex]
+
+
+    if not descriptor then
+
+        return self:hidePreview()
+
+    end
+
+
+    local geometry =
+        self:previewGeometry(descriptor)
+
+
+    if not geometry then
+
+        return self:hidePreview()
+
+    end
+
+
+    local margin =
+        self.canvasPadding
+
+
+    local rect =
+        {
+            x = geometry.x - margin,
+            y = geometry.y - margin,
+            w = geometry.w + (margin * 2),
+            h = geometry.h + (margin * 2),
+        }
+
+
+    if not self:createPreviewCanvas(rect) then
+
+        return self
+
+    end
+
+
+    local snapshot =
+        self:cachedSnapshot(descriptor)
+
+
+    local ok,
+          err =
+        pcall(function()
+
+            self.previewCanvas:frame(rect)
+
+
+            self.previewCanvas:replaceElements(
+                unpackTable(self:previewElements(geometry, snapshot))
+            )
+
+        end)
+
+
+    if not ok then
+
+        self:log("Erreur apercu : " .. tostring(err))
+
+
+        return self:hidePreview()
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:showPreview()
+
+    if not self.enableWindowPreview then
+
+        return self
+
+    end
+
+
+    if not self.entries then
+
+        return self
+
+    end
+
+
+    self:renderPreview()
+
+
+    if not self.previewCanvas then
+
+        return self
+
+    end
+
+
+    safeCall(function()
+
+        self.previewCanvas:show(0)
+
+    end)
+
+
+    self.previewVisible =
+        true
+
+
+    return self
+
+end
+
+
+function obj:hidePreview()
+
+    self:cancelPreviewTimer()
+
+
+    if self.previewCanvas and self.previewVisible then
+
+        safeCall(function()
+
+            self.previewCanvas:hide(0)
+
+        end)
+
+    end
+
+
+    self.previewVisible =
+        false
+
+
+    return self
+
+end
+
+
+function obj:cancelPreviewTimer()
+
+    if self.previewTimer then
+
+        self.previewTimer:stop()
+
+
+        self.previewTimer =
+            nil
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:deletePreviewCanvas()
+
+    self:hidePreview()
+
+
+    if self.previewCanvas then
+
+        safeCall(function()
+
+            self.previewCanvas:delete(0)
+
+        end)
+
+
+        self.previewCanvas =
+            nil
+
+    end
+
+
+    self.previewIndex =
+        nil
+
+
+    return self
+
+end
+
+
+-- Appele apres chaque rendu. Une capture qui arrive ne doit pas relancer
+-- le compte a rebours : sur la meme tuile, on se contente de rafraichir
+-- l'image de l'apercu deja visible.
+
+function obj:notePreviewTarget()
+
+    if not self.enableWindowPreview
+        or not self.entries then
+
+        return self
+
+    end
+
+
+    if self.selectionFromMouse == false
+        and not self.previewOnKeyboard then
+
+        self:hidePreview()
+
+        return self
+
+    end
+
+
+    if self.previewIndex == self.selectedIndex then
+
+        if self.previewVisible then
+
+            self:renderPreview()
+
+        end
+
+
+        return self
+
+    end
+
+
+    self.previewIndex =
+        self.selectedIndex
+
+
+    self:hidePreview()
+
+
+    self.previewTimer =
+        timer.doAfter(
+            self.previewDelay,
+            function()
+
+                self.previewTimer =
+                    nil
+
+
+                self:showPreview()
+
+            end
+        )
 
 
     return self
@@ -4948,9 +5524,16 @@ function obj:start()
     self:ensureWindowFilter()
 
 
-    -- Allouee des maintenant, affichee seulement au premier switch.
+    -- Allouees des maintenant, affichees seulement au premier switch.
 
     self:createCanvas()
+
+
+    if self.enableWindowPreview then
+
+        self:createPreviewCanvas()
+
+    end
 
     self:createHotkeys()
 
@@ -4986,6 +5569,7 @@ function obj:stop()
     -- desactive gardait en memoire son canvas et toutes ses vignettes.
 
     self:deleteCanvas()
+    self:deletePreviewCanvas()
     self:releaseWindowFilter()
     self:clearSnapshotCache()
     self:removeScreenCaptureSession()

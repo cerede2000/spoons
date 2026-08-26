@@ -23,7 +23,7 @@ lua tests/lwq_config.lua LastWindowQuits.spoon/init.lua   # une seule suite
 | `sm_robustesse`  | SpoonManager    | entrées mal formées, échecs de démarrage, `stop()` |
 | `ws_fenetres`    | WindowSwitcher  | descripteurs, filtre permanent, collecte, ordre de profondeur, exclusions |
 | `ws_capture`     | WindowSwitcher  | cycle de vie du service ScreenCaptureKit, protocole, caches, fichiers /tmp |
-| `ws_session`     | WindowSwitcher  | modificateurs, souris, cache de géométrie, activation, arrêt |
+| `ws_session`     | WindowSwitcher  | modificateurs, souris, cache de géométrie, aperçu, activation, arrêt |
 
 ## Écrire une suite
 

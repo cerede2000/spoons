@@ -247,19 +247,102 @@ R.check("cache d'icônes vidé", next(obj.iconCache), nil)
 R.check("session close", obj.entries, nil)
 R.check("eventtap relâché", obj.modifierTap, nil)
 
-R.section("Le canvas est alloué au démarrage, pas au premier switch")
+R.section("Les canvas sont alloués au démarrage, pas au premier switch")
 obj.isStarted = false
 obj.switcherCanvas = nil
+obj.previewCanvas = nil
 obj.hotkeyMapping = { forward = { {"alt"}, "tab" } }
 local canvasAvantStart = #ctl.canvases
 obj:start()
-R.check("canvas créé par start()", #ctl.canvases, canvasAvantStart + 1)
-R.check("mais pas affiché", ctl.canvases[#ctl.canvases].shown, false)
-local canvasDuStart = ctl.canvases[#ctl.canvases]
+R.check("les deux canvas sont créés", #ctl.canvases, canvasAvantStart + 2)
+local canvasDuStart = obj.switcherCanvas
+R.check("le panneau n'est pas affiché", canvasDuStart.shown, false)
+R.check("l'aperçu non plus", obj.previewCanvas.shown, false)
+R.check("l'aperçu est sous le panneau",
+    obj.previewCanvas.level_ ~= canvasDuStart.level_, true)
 nouvelleSession()
 obj:step(1)
-R.check("le premier switch réutilise le même", ctl.canvases[#ctl.canvases], canvasDuStart)
+R.check("le premier switch réutilise le même panneau", obj.switcherCanvas, canvasDuStart)
 R.check("et l'affiche", canvasDuStart.shown, true)
+obj:commit()
+
+------------------------------------------------------------
+R.section("Aperçu : il attend avant de se montrer")
+------------------------------------------------------------
+nouvelleSession()
+obj.enableWindowPreview = true
+obj.previewOnKeyboard = true
+obj:step(1)
+R.check("rien n'est affiché dans l'instant", obj.previewVisible, false)
+R.check("un délai est armé", obj.previewTimer ~= nil, true)
+ctl.fireOnly(obj.previewDelay)
+R.check("puis l'aperçu apparaît", obj.previewVisible, true)
+R.check("il vise la tuile sélectionnée", obj.previewIndex, obj.selectedIndex)
+
+R.section("Changer de tuile le masque et relance le délai")
+ctl.now = ctl.now + 1
+obj:step(1)
+R.check("masqué aussitôt", obj.previewVisible, false)
+R.check("nouveau délai armé", obj.previewTimer ~= nil, true)
+ctl.fireOnly(obj.previewDelay)
+R.check("réaffiché sur la nouvelle tuile", obj.previewVisible, true)
+
+R.section("Une capture qui arrive ne relance pas le compte à rebours")
+local avantIndex = obj.previewIndex
+obj:redraw()
+R.check("toujours visible", obj.previewVisible, true)
+R.check("même tuile", obj.previewIndex, avantIndex)
+R.check("aucun nouveau délai", obj.previewTimer, nil)
+
+R.section("La validation le fait disparaître")
+obj:commit()
+R.check("aperçu masqué", obj.previewVisible, false)
+R.check("délai annulé", obj.previewTimer, nil)
+
+R.section("Le cadre suit la fenêtre réelle, borné par l'écran")
+local geo = obj:previewGeometry({ id = 1, frame = { x = 100, y = 80, w = 600, h = 400 } })
+R.check("largeur réelle conservée", geo.w, 600)
+R.check("hauteur réelle conservée", geo.h, 400)
+R.check("position réelle conservée", geo.x, 100)
+
+local enorme = obj:previewGeometry({ id = 2, frame = { x = -500, y = -500, w = 9000, h = 6000 } })
+R.check("réduit pour tenir à l'écran", enorme.w <= 1512, true)
+R.check("ramené dans l'écran", enorme.x >= 0, true)
+R.check("proportions préservées",
+    math.abs((enorme.w / enorme.h) - (9000 / 6000)) < 0.02, true)
+
+local sansCadre = obj:previewGeometry({ id = 3, frame = nil })
+R.check("sans cadre exploitable, un aperçu est quand même proposé",
+    sansCadre ~= nil and sansCadre.w > 0, true)
+
+R.section("Aperçu clavier désactivable")
+nouvelleSession()
+obj.previewOnKeyboard = false
+obj:step(1)
+R.check("aucun délai armé au clavier", obj.previewTimer, nil)
+R.check("rien d'affiché", obj.previewVisible, false)
+obj.previewOnKeyboard = true
+obj:commit()
+
+R.section("Le survol de la souris le déclenche")
+nouvelleSession()
+obj:step(1)
+ctl.fireOnly(obj.previewDelay)
+ctl.mousePosition = { x = 470, y = 350 }
+obj:handleMouseEvent("mouseMove", "tile:1")
+R.check("masqué le temps de changer de cible", obj.previewVisible, false)
+ctl.fireOnly(obj.previewDelay)
+R.check("réaffiché sur la tuile survolée", obj.previewVisible, true)
+R.check("sur la bonne tuile", obj.previewIndex, 1)
+obj:commit()
+
+R.section("Désactivé, il ne coûte rien")
+nouvelleSession()
+obj.enableWindowPreview = false
+obj:step(1)
+R.check("aucun délai", obj.previewTimer, nil)
+R.check("rien d'affiché", obj.previewVisible, false)
+obj.enableWindowPreview = true
 obj:commit()
 
 R.section("benchmark mesure sans laisser de trace")
