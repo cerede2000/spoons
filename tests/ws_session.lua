@@ -78,12 +78,29 @@ R.check("un seul timer de secours", #ctl.everyTimers, 1)
 R.check("timer de secours espacé, pas 0,01 s",
     ctl.everyTimers[1].delay, obj.modifierSafetyInterval)
 
-R.section("Relâcher la touche valide immédiatement")
+R.section("Relâcher la touche valide, mais hors du tap")
+-- Un eventtap fait passer chaque événement du système par le thread
+-- principal, et macOS attend la réponse. commit() démasque, restaure et
+-- donne le focus : trois appels d'accessibilité qui peuvent bloquer des
+-- centaines de millisecondes sur une application qui ne répond pas.
+-- Le tap doit rendre la main tout de suite.
 ctl.modifierRaw = 0
 ctl.eventtaps[1].fn()
-R.check("session fermée", obj.entries, nil)
+R.check("le tap n'a rien fait de lourd", obj.entries ~= nil, true)
+R.check("un commit est en attente", obj.commitPending, true)
+ctl.fireOnly(0)
+R.check("session fermée au tour suivant", obj.entries, nil)
 R.check("eventtap arrêté", tapMods.running, false)
 R.check("timer de secours arrêté", ctl.everyTimers[1].stopped, true)
+
+R.section("Une rafale de flagsChanged ne programme qu'un commit")
+nouvelleSession()
+obj:step(1)
+ctl.modifierRaw = 0
+local avant = #ctl.timers
+for _ = 1, 10 do ctl.eventtaps[1].fn() end
+R.check("dix événements, un seul travail programmé", #ctl.timers - avant, 1)
+ctl.fireOnly(0)
 
 R.section("Sans eventtap, le filet devient réactif")
 nouvelleSession()
@@ -274,7 +291,11 @@ R.check("il tourne pendant la session", tapEchap.running, true)
 
 local consomme = tapEchap.fn({ getKeyCode = function() return 53 end })
 R.check("la touche est consommée", consomme, true)
-R.check("session fermée", obj.entries, nil)
+-- La réponse au tap doit être immédiate : c'est elle qui consomme la
+-- touche. Le travail, lui, se fait hors du tap.
+R.check("mais rien de lourd dans le tap", obj.entries ~= nil, true)
+ctl.fireOnly(0)
+R.check("session fermée au tour suivant", obj.entries, nil)
 R.check("aucune fenêtre activée", #active, 0)
 R.check("panneau masqué", obj.switcherCanvas.shown, false)
 R.check("aperçu masqué", obj.previewVisible, false)
@@ -430,7 +451,9 @@ end
 local vise = obj.entries[obj.selectedIndex].id
 local mange = tapClavier.fn({ getKeyCode = function() return obj:closeKeyCode() end })
 R.check("la touche est consommée", mange, true)
-R.check("la fenêtre visée est fermée", ferme[1], vise)
+R.check("rien de fermé depuis le tap", ferme[1], nil)
+ctl.fireOnly(0)
+R.check("la fenêtre visée est fermée au tour suivant", ferme[1], vise)
 R.check("la session continue", obj.entries ~= nil, true)
 
 obj.enableCloseKey = false
@@ -541,7 +564,10 @@ end
 local viseM = obj.selectedIndex
 local mangeM = tapM.fn({ getKeyCode = function() return obj:minimizeKeyCode() end })
 R.check("la touche est consommée", mangeM, true)
-R.check("la fenêtre visée est réduite", obj.entries[viseM].minimized, true)
+R.check("rien de réduit depuis le tap", obj.entries[viseM].minimized, false)
+ctl.fireOnly(0)
+R.check("la fenêtre visée est réduite au tour suivant",
+    obj.entries[viseM].minimized, true)
 R.check("la session continue", obj.entries ~= nil, true)
 obj.enableMinimizeKey = false
 R.check("désactivable : la touche passe",

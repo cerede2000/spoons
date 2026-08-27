@@ -52,4 +52,53 @@ obj:showIndicator(3)
 R.check("recréé au couper suivant", obj.menuBar ~= nil, true)
 R.check("objet neuf", obj.menuBar ~= first, true)
 
+
+
+------------------------------------------------------------
+R.section("Le tap n'existe que pendant que le Finder est au premier plan")
+------------------------------------------------------------
+-- Un eventtap fait passer chaque frappe du système par le thread
+-- principal de Hammerspoon, et macOS attend la réponse. Tant que ce tap
+-- existe, le moindre blocage de ce thread — un balayage d'accessibilité,
+-- un autre Spoon — retarde la saisie PARTOUT. Le callback commençait de
+-- toute façon par vérifier que le Finder est au premier plan : hors du
+-- Finder, le tap n'a aucune raison d'exister.
+local finder = lib.app(ctl, { name = "Finder", bundle = "com.apple.finder" })
+local autre  = lib.app(ctl, { name = "Safari", bundle = "com.apple.Safari" })
+
+ctl.frontmost = autre
+obj:start()
+R.check("hors du Finder : le tap ne tourne pas", obj.tapRunning, false)
+R.check("un veilleur d'application est en place", ctl.appWatcherRunning, true)
+
+ctl.frontmost = finder
+ctl.appWatcherFn()
+R.check("le Finder passe devant : le tap démarre", obj.tapRunning, true)
+
+ctl.frontmost = autre
+ctl.appWatcherFn()
+R.check("on quitte le Finder : le tap s'arrête", obj.tapRunning, false)
+
+R.section("Aucune application au premier plan")
+ctl.frontmost = nil
+ctl.appWatcherFn()
+R.check("pas de Finder, pas de tap", obj.tapRunning, false)
+
+R.section("Le veilleur est démonté à l'arrêt")
+ctl.frontmost = finder
+ctl.appWatcherFn()
+R.check("tap actif", obj.tapRunning, true)
+obj:stop()
+R.check("veilleur arrêté", ctl.appWatcherRunning, false)
+R.check("tap arrêté", obj.tapRunning, false)
+
+R.section("On peut revenir au tap permanent")
+obj.followFrontmostApp = false
+ctl.frontmost = autre
+obj:start()
+R.check("tap permanent malgré l'application au premier plan", obj.tapRunning, true)
+R.check("aucun veilleur", ctl.appWatcherRunning, false)
+obj:stop()
+obj.followFrontmostApp = true
+
 R.finish()

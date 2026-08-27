@@ -28,7 +28,7 @@ obj.__index = obj
 
 obj.name = "FinderPermanentDelete"
 
-obj.version = "1.0.0"
+obj.version = "1.1.0"
 
 obj.author = "Benjamin Cerede"
 
@@ -148,6 +148,120 @@ end
 
 
 
+
+------------------------------------------------------------
+-- LE TAP NE VIT QUE DANS LE FINDER
+--
+-- Il etait enregistre en permanence, alors que son callback commence
+-- par verifier que le Finder est au premier plan. Un eventtap fait
+-- passer chaque frappe du systeme par le thread principal de
+-- Hammerspoon : tant que ce tap existe, le moindre blocage de ce
+-- thread -- un balayage d'accessibilite, un appel bloquant, un autre
+-- Spoon -- retarde la saisie PARTOUT, pas seulement dans le Finder.
+--
+-- Le test lui-meme est gratuit (0,0002 ms, mesure). Ce n'est donc pas
+-- son cout qui pose probleme, c'est l'exposition. Hors du Finder, le
+-- tap n'existe plus du tout et le clavier ne traverse plus Hammerspoon.
+------------------------------------------------------------
+
+obj.followFrontmostApp = true
+
+
+function obj:finderIsFrontmost()
+
+    local app =
+        hs.application.frontmostApplication()
+
+
+    return app ~= nil
+        and app:bundleID() == "com.apple.finder"
+
+end
+
+
+function obj:syncTapToFrontmost()
+
+    if not self.tap then
+
+        return self
+
+    end
+
+
+    if not self.followFrontmostApp
+        or self:finderIsFrontmost() then
+
+        if not self.tapRunning then
+
+            self.tap:start()
+
+            self.tapRunning = true
+
+        end
+
+    elseif self.tapRunning then
+
+        self.tap:stop()
+
+        self.tapRunning = false
+
+    end
+
+
+    return self
+
+end
+
+
+function obj:startFrontmostWatcher()
+
+    self:stopFrontmostWatcher()
+
+
+    if not self.followFrontmostApp then
+
+        return self
+
+    end
+
+
+    -- Tous les evenements, pas seulement activated : une application
+    -- qui se termine ou se demasque change aussi le premier plan, et
+    -- un evenement manque laisserait le tap dans le mauvais etat. Le
+    -- test coute 0,0002 ms, on peut se permettre de le refaire.
+
+    self.frontmostWatcher =
+        hs.application.watcher.new(function()
+
+            self:syncTapToFrontmost()
+
+        end)
+
+
+    self.frontmostWatcher:start()
+
+
+    return self
+
+end
+
+
+function obj:stopFrontmostWatcher()
+
+    if self.frontmostWatcher then
+
+        self.frontmostWatcher:stop()
+
+        self.frontmostWatcher = nil
+
+    end
+
+
+    return self
+
+end
+
+
 ------------------------------------------------------------
 -- START / STOP
 ------------------------------------------------------------
@@ -232,7 +346,11 @@ function obj:start()
         )
 
 
-    self.tap:start()
+    self.tapRunning = false
+
+    self:startFrontmostWatcher()
+
+    self:syncTapToFrontmost()
 
     self:log("demarre")
 
@@ -244,6 +362,9 @@ end
 
 function obj:stop()
 
+    self:stopFrontmostWatcher()
+
+
     if self.tap then
 
         self.tap:stop()
@@ -251,6 +372,9 @@ function obj:stop()
         self.tap = nil
 
     end
+
+
+    self.tapRunning = false
 
 
     self:log("arrete")

@@ -105,4 +105,68 @@ obj:startEnabledSpoons()
 R.check("aucun échec", next(obj.failedSpoons), nil)
 
 hs.notify.new = realNew
+
+
+------------------------------------------------------------
+R.section("Surveillance du thread principal")
+------------------------------------------------------------
+-- Tout ce que fait Hammerspoon s'exécute sur un seul thread, et un
+-- eventtap y fait passer chaque frappe et chaque clic. Tant que ce
+-- thread est occupé, macOS attend : l'utilisateur perd le clavier et la
+-- souris. Un timer périodique comparé à l'heure à laquelle il aurait dû
+-- partir mesure exactement ces blocages.
+obj.mainThreadWatchEnabled = true
+obj.mainThreadWatchInterval = 0.5
+obj.mainThreadStallThreshold = 0.25
+obj.mainThreadStalls = 0
+obj.mainThreadWorstStall = 0
+ctl.everyTimers = {}
+obj:startMainThreadWatch()
+R.check("un timer périodique est en place", #ctl.everyTimers, 1)
+R.check("à la bonne cadence", ctl.everyTimers[1].delay, 0.5)
+
+-- À l'heure : rien à signaler.
+ctl.now = ctl.now + 0.5
+ctl.printed = {}
+ctl.everyTimers[1].fn()
+R.check("timer à l'heure : silence", #ctl.printed, 0)
+R.check("aucun blocage compté", obj.mainThreadStalls, 0)
+
+-- Un léger retard, sous le seuil : toujours silence.
+ctl.now = ctl.now + 0.6
+ctl.printed = {}
+ctl.everyTimers[1].fn()
+R.check("retard sous le seuil : silence", #ctl.printed, 0)
+
+-- Un vrai blocage.
+ctl.now = ctl.now + 1.25
+ctl.printed = {}
+ctl.everyTimers[1].fn()
+R.check("blocage signalé", #ctl.printed, 1)
+R.check("la durée est dite",
+    table.concat(ctl.printed, " "):find("750 ms", 1, true) ~= nil, true)
+R.check("et ce qu'elle coûte",
+    table.concat(ctl.printed, " "):find("aucune frappe", 1, true) ~= nil, true)
+R.check("compté", obj.mainThreadStalls, 1)
+R.check("le pire est retenu", math.floor(obj.mainThreadWorstStall * 1000), 750)
+
+-- Le retard ne se cumule pas : la référence repart de l'instant réel.
+ctl.now = ctl.now + 0.5
+ctl.printed = {}
+ctl.everyTimers[1].fn()
+R.check("pas de blocage fantôme au tour suivant", #ctl.printed, 0)
+
+R.section("La surveillance s'arrête et se raconte")
+local etat = obj:mainThreadStatus()
+R.check("l'état dit qu'elle est active", etat:find("active", 1, true) ~= nil, true)
+R.check("et donne le pire", etat:find("750 ms", 1, true) ~= nil, true)
+obj:stopMainThreadWatch()
+R.check("timer libéré", obj.mainThreadTimer, nil)
+
+obj.mainThreadWatchEnabled = false
+ctl.everyTimers = {}
+obj:startMainThreadWatch()
+R.check("désactivable : aucun timer", #ctl.everyTimers, 0)
+obj.mainThreadWatchEnabled = true
+
 R.finish()

@@ -70,7 +70,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.19.0"
+obj.version = "0.20.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -782,6 +782,9 @@ obj.activeSpaceIDs = nil
 -- Faux des qu'un appel a hs.spaces a echoue : on cesse d'insister pour
 -- la session en cours.
 obj.spacesUsable = true
+
+-- Un commit differe est en vol : ne pas en programmer un second.
+obj.commitPending = false
 
 obj.windowFilterInstance = nil
 
@@ -6341,14 +6344,39 @@ function obj:ensureModifierTap()
     end
 
 
+    -- Un eventtap fait passer chaque evenement du systeme par le
+    -- thread principal de Hammerspoon, et macOS attend la reponse.
+    -- commit() demasque une application, restaure une fenetre et lui
+    -- donne le focus : trois appels d'accessibilite qui peuvent
+    -- bloquer plusieurs centaines de millisecondes sur une application
+    -- qui ne repond pas. Les faire ici retenait le clavier ET la
+    -- souris pendant tout ce temps, et au-dela du delai accorde par
+    -- macOS le tap etait desactive sans preavis.
+    --
+    -- On rend donc la main immediatement et le travail se fait au tour
+    -- de boucle suivant, hors du tap.
+
     local tap =
         eventtap.new(
             { eventtap.event.types.flagsChanged },
             function()
 
-                if not self:modifiersPressed() then
+                if not self:modifiersPressed()
+                    and not self.commitPending then
 
-                    self:commit()
+                    self.commitPending =
+                        true
+
+
+                    timer.doAfter(0, function()
+
+                        self.commitPending =
+                            false
+
+
+                        self:commit()
+
+                    end)
 
                 end
 
@@ -6468,9 +6496,18 @@ function obj:ensureSessionKeyTap()
                     end)
 
 
+                -- Meme raison que pour le tap des modificateurs :
+                -- fermer ou reduire une fenetre passe par
+                -- l'accessibilite. La reponse au tap, elle, doit etre
+                -- immediate -- c'est elle qui consomme la touche.
+
                 if code == self:cancelKeyCode() then
 
-                    self:cancel()
+                    timer.doAfter(0, function()
+
+                        self:cancel()
+
+                    end)
 
 
                     -- Consomme : l'application dessous ne doit pas
@@ -6484,7 +6521,11 @@ function obj:ensureSessionKeyTap()
                 if self.enableCloseKey
                     and code == self:closeKeyCode() then
 
-                    self:closeSelected()
+                    timer.doAfter(0, function()
+
+                        self:closeSelected()
+
+                    end)
 
 
                     return true
@@ -6495,7 +6536,11 @@ function obj:ensureSessionKeyTap()
                 if self.enableMinimizeKey
                     and code == self:minimizeKeyCode() then
 
-                    self:minimizeSelected()
+                    timer.doAfter(0, function()
+
+                        self:minimizeSelected()
+
+                    end)
 
 
                     return true
@@ -6937,6 +6982,9 @@ function obj:endSession()
     local selected =
         self.entries and self.entries[self.selectedIndex]
 
+
+    self.commitPending =
+        false
 
     self:stopModifierWatcher()
     self:stopSessionKeyTap()

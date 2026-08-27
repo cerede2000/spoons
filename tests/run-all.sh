@@ -12,6 +12,7 @@ for pair in \
     "lwq_securite:LastWindowQuits.spoon/init.lua" \
     "lwq_config:LastWindowQuits.spoon/init.lua" \
     "finder_cutpaste:FinderCutPaste.spoon/init.lua" \
+    "finder_delete:FinderPermanentDelete.spoon/init.lua" \
     "sm_menu:SpoonManager.spoon/init.lua" \
     "sm_robustesse:SpoonManager.spoon/init.lua" \
     "ws_fenetres:WindowSwitcher.spoon/init.lua" \

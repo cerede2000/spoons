@@ -21,7 +21,7 @@ obj.__index = obj
 
 obj.name = "SpoonManager"
 
-obj.version = "2.0.0"
+obj.version = "2.1.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -1128,6 +1128,166 @@ end
 
 
 ------------------------------------------------------------
+-- SURVEILLANCE DU THREAD PRINCIPAL
+--
+-- Tout ce que fait Hammerspoon s'execute sur un seul thread. Or un
+-- eventtap fait passer chaque frappe et chaque clic par ce thread :
+-- tant qu'il est occupe, macOS attend, et l'utilisateur perd le
+-- clavier et la souris. Au-dela du delai que macOS accorde au tap,
+-- celui-ci est desactive et les evenements filent sans etre vus.
+--
+-- Un timer periodique se compare a l'heure a laquelle il aurait du
+-- partir. Son retard mesure exactement la duree pendant laquelle le
+-- thread etait pris. C'est la seule facon d'attribuer une perte de
+-- saisie a la bonne cause plutot que de la deviner.
+------------------------------------------------------------
+
+obj.mainThreadWatchEnabled = true
+
+obj.mainThreadWatchInterval = 0.5
+
+-- macOS accorde environ une seconde a un eventtap avant de le
+-- desactiver. On signale bien avant, pour voir venir.
+obj.mainThreadStallThreshold = 0.25
+
+obj.mainThreadStalls = 0
+
+obj.mainThreadWorstStall = 0
+
+
+function obj:startMainThreadWatch()
+
+    self:stopMainThreadWatch()
+
+
+    if not self.mainThreadWatchEnabled then
+
+        return self
+
+    end
+
+
+    local intervalle =
+        tonumber(self.mainThreadWatchInterval) or 0.5
+
+
+    local attendu =
+        hs.timer.secondsSinceEpoch() + intervalle
+
+
+    self.mainThreadTimer =
+        hs.timer.doEvery(
+            intervalle,
+            function()
+
+                local maintenant =
+                    hs.timer.secondsSinceEpoch()
+
+
+                local retard =
+                    maintenant - attendu
+
+
+                attendu =
+                    maintenant + intervalle
+
+
+                local seuil =
+                    tonumber(self.mainThreadStallThreshold) or 0.25
+
+
+                if retard < seuil then
+
+                    return
+
+                end
+
+
+                self.mainThreadStalls =
+                    (self.mainThreadStalls or 0) + 1
+
+
+                if retard > (self.mainThreadWorstStall or 0) then
+
+                    self.mainThreadWorstStall =
+                        retard
+
+                end
+
+
+                self:log(
+                    string.format(
+                        "Thread principal bloque %d ms."
+                        .. " Pendant ce temps, aucune frappe ni aucun"
+                        .. " clic n'est transmis si un eventtap est"
+                        .. " actif. (%d depuis le demarrage, pire : %d ms)",
+                        math.floor(retard * 1000),
+                        self.mainThreadStalls,
+                        math.floor((self.mainThreadWorstStall or 0) * 1000)
+                    )
+                )
+
+            end
+        )
+
+
+    return self
+
+end
+
+
+function obj:stopMainThreadWatch()
+
+    if self.mainThreadTimer then
+
+        self.mainThreadTimer:stop()
+
+
+        self.mainThreadTimer =
+            nil
+
+    end
+
+
+    return self
+
+end
+
+
+-- Etat de la surveillance, sans rien changer.
+
+function obj:mainThreadStatus()
+
+    local lignes =
+        {
+            string.format(
+                "Surveillance : %s (toutes les %.1f s, seuil %d ms)",
+                self.mainThreadTimer and "active" or "arretee",
+                tonumber(self.mainThreadWatchInterval) or 0.5,
+                math.floor((tonumber(self.mainThreadStallThreshold) or 0.25) * 1000)
+            ),
+            string.format(
+                "Blocages signales : %d, le pire a %d ms",
+                self.mainThreadStalls or 0,
+                math.floor((self.mainThreadWorstStall or 0) * 1000)
+            ),
+        }
+
+
+    local texte =
+        table.concat(lignes, "\n")
+
+
+    self:log(texte)
+
+
+    return texte
+
+end
+
+
+
+------------------------------------------------------------
 -- START / STOP
 ------------------------------------------------------------
 
@@ -1138,6 +1298,8 @@ function obj:start()
     self:startEnabledSpoons()
 
     self:updateMenuBar()
+
+    self:startMainThreadWatch()
 
     self:log(
         "Spoon initialise"
@@ -1165,6 +1327,9 @@ function obj:stop()
         end
 
     end
+
+
+    self:stopMainThreadWatch()
 
 
     if self.menuBar then

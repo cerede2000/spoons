@@ -134,6 +134,8 @@ function M.install(opts)
         battery = { percentage=function() return 80 end, powerSource=function() return "AC Power" end },
         application = setmetatable({
             runningApplications = function() return ctl.runningApps end,
+            -- ctl.frontmost = application au premier plan (ou nil)
+            frontmostApplication = function() return ctl.frontmost end,
             get = function(key)
                 for _, a in ipairs(ctl.runningApps) do
                     if a._bundle == key or a._name == key then return a end
@@ -147,8 +149,11 @@ function M.install(opts)
                 end
                 return r
             end,
-            watcher = setmetatable({ new = function(fn) ctl.appWatcherFn = fn
-                    return { start=function() end, stop=function() end } end },
+            watcher = setmetatable({ new = function(fn)
+                    ctl.appWatcherFn = fn
+                    ctl.appWatchers = (ctl.appWatchers or 0) + 1
+                    return { start = function() ctl.appWatcherRunning = true end,
+                             stop  = function() ctl.appWatcherRunning = false end } end },
                 { __index = function(_, k) return k end }),
         }, {}),
         spaces = {
