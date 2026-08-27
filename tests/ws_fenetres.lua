@@ -133,11 +133,13 @@ ctl.orderedIDs    = { 12, 10, 11 }           -- profondeur WindowServer
 obj.completeWithAllWindows = true
 local collected = obj:collectWindows()
 R.check("quatre candidats, un exclu, aucun doublon", #collected, 3)
-R.check("MRU du filtre préservée en tête", collected[1].id, 10)
-R.check("deuxième du filtre ensuite", collected[2].id, 11)
-R.check("la fenêtre trouvée en second passage suit", collected[3].id, 12)
+-- La pile du WindowServer fait foi, quelle que soit la passe d'où la
+-- fenêtre vient.
+R.check("la plus en avant d'abord", collected[1].id, 12)
+R.check("puis la suivante", collected[2].id, 10)
+R.check("puis la dernière", collected[3].id, 11)
 
-R.section("La queue est rangée par profondeur, pas au hasard")
+R.section("Toute la grille est rangée par profondeur, pas seulement la queue")
 local w14 = win(14, mail, { title = "Brouillon" })
 ctl.filterWindows = { w10 }
 ctl.allWindows    = { w14, w12 }   -- 14 avant 12 dans l'énumération
@@ -146,6 +148,53 @@ collected = obj:collectWindows()
 R.check("tête inchangée", collected[1].id, 10)
 R.check("la plus en avant d'abord", collected[2].id, 12)
 R.check("la plus en arrière ensuite", collected[3].id, 14)
+
+------------------------------------------------------------
+R.section("Le filtre a manqué un changement de fenêtre : le WindowServer corrige")
+------------------------------------------------------------
+-- hs.window.filter trie par timeFocused, qu'il ne met à jour que sur
+-- les événements de focus qu'il observe. Un clic sur une autre fenêtre,
+-- le Cmd+Tab natif, une application qui se met devant toute seule : son
+-- ordre ne bouge pas, et la deuxième tuile ne désigne plus la fenêtre
+-- précédente. La pile du WindowServer, elle, est vraie par
+-- construction.
+ctl.filterWindows = { w10, w11, w12 }   -- le filtre est resté sur son idée
+ctl.allWindows    = { w10, w11, w12 }
+ctl.orderedIDs    = { 12, 11, 10 }      -- la réalité : 12 est devant
+collected = obj:collectWindows()
+R.check("la fenêtre réellement au premier plan est en tête", collected[1].id, 12)
+R.check("puis celle d'avant", collected[2].id, 11)
+R.check("puis la plus ancienne", collected[3].id, 10)
+
+R.section("Ce que le WindowServer ne voit pas garde l'ordre du filtre")
+-- Réduites, masquées, posées sur un autre bureau : elles ne sont sur
+-- aucune pile visible et viennent après, dans l'ordre du filtre.
+ctl.filterWindows = { w11, w10, w12 }
+ctl.allWindows    = { w11, w10, w12 }
+ctl.orderedIDs    = { 12 }              -- seule 12 est visible
+collected = obj:collectWindows()
+R.check("la visible passe devant", collected[1].id, 12)
+R.check("les autres gardent l'ordre du filtre", collected[2].id, 11)
+R.check("dans l'ordre", collected[3].id, 10)
+
+R.section("Aucune fenêtre visible : on ne casse rien")
+ctl.orderedIDs = {}
+collected = obj:collectWindows()
+R.check("l'ordre du filtre est conservé tel quel", collected[1].id, 11)
+R.check("intégralement", collected[2].id, 10)
+
+R.section("Le WindowServer muet : on ne casse rien non plus")
+ctl.orderedIDs = nil
+collected = obj:collectWindows()
+R.check("ordre du filtre", collected[1].id, 11)
+
+R.section("Désactivable")
+ctl.orderedIDs = { 12, 11, 10 }
+obj.orderByWindowServer = false
+collected = obj:collectWindows()
+R.check("on revient à l'ordre du filtre", collected[1].id, 11)
+obj.orderByWindowServer = true
+ctl.orderedIDs = { 10, 12, 14 }
 
 ------------------------------------------------------------
 R.section("Régression : le filtre ignore les fenêtres réduites au démarrage")
@@ -215,5 +264,29 @@ R.check("relu quand la date change", reads, 2)
 obj:refreshIgnoredBundles(true)
 R.check("relu de force sur demande", reads, 3)
 obj.readIgnoredBundlesFile = realRead
+
+
+------------------------------------------------------------
+R.section("Diagnostic d'ordre : dire de quel côté ça dérape")
+------------------------------------------------------------
+ctl.filterWindows = { w11, w10, w12 }
+ctl.allWindows    = { w11, w10, w12 }
+ctl.orderedIDs    = { 12, 11, 10 }
+ctl.focusedWindow = w12
+local rapport = obj:orderDiagnostics()
+R.check("la source de l'ordre est dite",
+    rapport:find("WindowServer", 1, true) ~= nil, true)
+R.check("la fenêtre au premier plan est signalée",
+    rapport:find("premier plan", 1, true) ~= nil, true)
+R.check("chaque fenêtre du filtre est listée",
+    select(2, rapport:gsub("Onglet A", "")), 1)
+R.check("le rang WindowServer figure",
+    rapport:find("Boîte", 1, true) ~= nil, true)
+
+R.section("Le filtre muet est dit tel quel")
+ctl.filterWindows = {}
+rapport = obj:orderDiagnostics()
+R.check("le vide est annoncé",
+    rapport:find("aucune fenetre", 1, true) ~= nil, true)
 
 R.finish()

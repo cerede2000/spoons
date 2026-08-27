@@ -289,6 +289,36 @@ documentee reste en place si la lecture directe disparait un jour.
 `hs.spaces` repose sur les API privees de SkyLight. S'il devient
 indisponible, tout ce qui precede s'efface et le switcher continue.
 
+### Ordre de la grille
+
+L'ordre vient de la pile du WindowServer, pas du filtre.
+
+`hs.window.filter` trie par `timeFocused`, un horodatage qu'il ne met a
+jour que sur les evenements de focus qu'il observe lui-meme, et qui vaut
+`0` pour une fenetre qu'il n'a jamais vue recevoir le focus. Changer de
+fenetre autrement que par le switcher -- un clic, le Cmd+Tab natif, une
+application qui se met devant toute seule -- laissait son ordre
+inchange : la deuxieme tuile ne designait plus la fenetre precedente.
+
+`hs.window._orderedwinids()` est la pile du WindowServer, de l'avant
+vers l'arriere. Elle n'a besoin d'aucun veilleur, d'aucun abonnement et
+d'aucun enregistrement prealable : elle est vraie par construction.
+Verifie sur la machine, la fenetre au premier plan y est toujours
+premiere.
+
+Les fenetres qui n'y figurent pas -- reduites, masquees, posees sur un
+autre bureau -- ne sont sur aucune pile visible. Elles gardent l'ordre
+du filtre et viennent apres.
+
+```lua
+spoon.WindowSwitcher.orderByWindowServer = true   -- defaut
+spoon.WindowSwitcher:orderDiagnostics()
+```
+
+`orderDiagnostics()` affiche cote a cote le rang du WindowServer et
+celui du filtre, et marque la fenetre au premier plan. Il ne change
+rien.
+
 ### Fenetres que macOS refuse de capturer
 
 Certaines fenetres ne seront jamais capturables. Le panneau

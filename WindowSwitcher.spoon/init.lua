@@ -70,7 +70,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.20.0"
+obj.version = "0.21.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -91,6 +91,26 @@ obj.includeMinimized = true
 obj.includeHidden = true
 
 obj.includeOtherSpaces = true
+
+-- L'ordre de la grille vient du WindowServer, pas du filtre.
+--
+-- hs.window.filter trie par timeFocused, un horodatage qu'il ne met a
+-- jour que sur les evenements de focus qu'il observe lui-meme. Une
+-- fenetre qu'il n'a jamais vue recevoir le focus vaut 0. Changer de
+-- fenetre autrement que par le switcher -- un clic, le Cmd+Tab natif,
+-- une application qui se met devant toute seule -- laissait donc
+-- l'ordre inchange, et la deuxieme tuile ne designait plus la fenetre
+-- precedente.
+--
+-- window._orderedwinids() est la pile du WindowServer, front to back.
+-- Elle n'a besoin d'aucun veilleur, d'aucun abonnement et d'aucun
+-- enregistrement prealable : elle est vraie par construction. Verifie
+-- sur la machine, la fenetre au premier plan y est toujours premiere.
+--
+-- Les fenetres qui n'y figurent pas -- reduites, masquees, posees sur
+-- un autre bureau -- ne sont sur aucune pile visible. Elles gardent
+-- l'ordre du filtre et viennent apres.
+obj.orderByWindowServer = true
 
 obj.excludeEmptyTitles = false
 
@@ -2284,6 +2304,206 @@ function obj:orderedWindowRanks()
 end
 
 
+-- Reordonne selon la pile du WindowServer. Tri stable : a rang egal,
+-- et pour tout ce qui n'a pas de rang, l'ordre d'arrivee est conserve.
+
+function obj:applyWindowServerOrder(collected)
+
+    if not self.orderByWindowServer
+        or type(collected) ~= "table"
+        or #collected < 2 then
+
+        return collected
+
+    end
+
+
+    local ranks =
+        self:orderedWindowRanks()
+
+
+    if not ranks then
+
+        return collected
+
+    end
+
+
+    local arrivee =
+        {}
+
+
+    local classes =
+        {}
+
+
+    local sansRang =
+        {}
+
+
+    for index, descriptor in ipairs(collected) do
+
+        arrivee[descriptor] =
+            index
+
+
+        if ranks[descriptor.id] then
+
+            classes[#classes + 1] =
+                descriptor
+
+        else
+
+            sansRang[#sansRang + 1] =
+                descriptor
+
+        end
+
+    end
+
+
+    -- Rien de visible : le WindowServer n'a rien a nous apprendre.
+
+    if #classes == 0 then
+
+        return collected
+
+    end
+
+
+    table.sort(classes, function(a, b)
+
+        local ra,
+              rb =
+            ranks[a.id],
+            ranks[b.id]
+
+
+        if ra ~= rb then
+
+            return ra < rb
+
+        end
+
+
+        return arrivee[a] < arrivee[b]
+
+    end)
+
+
+    for _, descriptor in ipairs(sansRang) do
+
+        classes[#classes + 1] =
+            descriptor
+
+    end
+
+
+    return classes
+
+end
+
+
+-- Compare ce que dit le filtre a ce que dit le WindowServer, sans rien
+-- changer. Sert a voir de quel cote l'ordre derape.
+
+function obj:orderDiagnostics()
+
+    local filter =
+        self:ensureWindowFilter()
+
+
+    local duFiltre =
+        filter and safeCall(function()
+
+            return filter:getWindows(
+                windowFilter.sortByFocusedLast
+            )
+
+        end) or {}
+
+
+    local ranks =
+        self:orderedWindowRanks() or {}
+
+
+    local devant =
+        safeCall(function()
+
+            return window.focusedWindow()
+
+        end)
+
+
+    local devantID =
+        devant and safeCall(function()
+
+            return devant:id()
+
+        end)
+
+
+    local lignes =
+        {
+            string.format(
+                "Ordre : %s | fenetre au premier plan : %s",
+                self.orderByWindowServer
+                    and "WindowServer" or "filtre",
+                tostring(devantID)
+            ),
+            "  rang  filtre  fenetre",
+        }
+
+
+    self:beginDescriptorPass()
+
+
+    for index, win in ipairs(duFiltre) do
+
+        local descriptor =
+            self:describeWindow(win)
+
+
+        if descriptor then
+
+            lignes[#lignes + 1] =
+                string.format(
+                    "  %-5s %-6d %s%s",
+                    ranks[descriptor.id]
+                        and tostring(ranks[descriptor.id]) or "-",
+                    index,
+                    tostring(descriptor.displayTitle),
+                    descriptor.id == devantID and "   <-- premier plan" or ""
+                )
+
+        end
+
+    end
+
+
+    self:endDescriptorPass()
+
+
+    if #duFiltre == 0 then
+
+        lignes[#lignes + 1] =
+            "  (le filtre ne renvoie aucune fenetre)"
+
+    end
+
+
+    local texte =
+        table.concat(lignes, "\n")
+
+
+    self:log(texte)
+
+
+    return texte
+
+end
+
+
 function obj:collectWindows()
 
     self:refreshIgnoredBundles()
@@ -2363,6 +2583,10 @@ function obj:collectWindows()
         self:sortTail(collected, firstPassCount)
 
     end
+
+
+    collected =
+        self:applyWindowServerOrder(collected)
 
 
     self:endDescriptorPass()
