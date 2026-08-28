@@ -94,4 +94,140 @@ obj:installShutdownGuard()
 ctl.shutdown()
 R.check("hook préexistant chaîné", prevCalled, true)
 
+
+------------------------------------------------------------
+R.section("Sortie du vert : la frappe avalée par la fenêtre synthétique")
+------------------------------------------------------------
+-- Le scénario mesuré chez l'utilisateur :
+--
+--   T      keep-alive envoyé, fenêtre synthétique ouverte 1 s
+--   T+0,3  l'utilisateur tape — le tap ignore, c'est la fenêtre
+--   T+8    l'idle redevient consultable (postKeepAliveIdleIgnorePeriod)
+--   T+10   idle vaut 10 s, plus que realActivityReturnIdleThreshold (6)
+--   ...    l'utilisateur ne tape plus : plus aucun événement
+--
+-- L'application restait verte indéfiniment. La nouvelle règle ne
+-- compare plus l'inactivité à un seuil fixe, mais à l'âge de NOTRE
+-- dernier événement : si l'horloge de macOS est plus récente que lui,
+-- c'est que quelqu'un d'autre a agi.
+obj.currentState = obj.STATE.KEEPALIVE
+obj.keepaliveExitMargin = 2
+obj.keepaliveEnteredAt = 1000
+obj.lastKeepAliveTime = 1000
+
+-- Personne n'a rien fait : l'inactivité suit notre keep-alive.
+ctl.timeNow = 1010
+ctl.idle = 10
+R.check("aucune activité : on reste vert",
+    obj:realActivitySinceOurLastEvent(), false)
+
+-- L'utilisateur a tapé à T+3 puis s'est arrêté : inactivité 7 s, notre
+-- keep-alive remonte à 10 s. Plus récent que nous, donc c'est lui.
+ctl.idle = 7
+R.check("frappe manquée par le tap : rattrapée quand même",
+    obj:realActivitySinceOurLastEvent(), true)
+
+-- L'ancienne règle ne l'aurait pas vue : 7 s dépasse le seuil de 6.
+R.check("l'ancien seuil aurait échoué",
+    7 <= obj.realActivityReturnIdleThreshold, false)
+
+-- Ce que l'inférence ne peut PAS voir : une activité trop proche de la
+-- nôtre. Elle est indiscernable par construction — c'est la fermeture
+-- anticipée de la fenêtre aveugle qui couvre ce cas, pas ce filet.
+ctl.idle = 9.7
+R.check("activité à 0,3 s de la nôtre : hors de portée de l'inférence",
+    obj:realActivitySinceOurLastEvent(), false)
+
+R.section("La marge protège des conclusions hâtives")
+ctl.idle = 0
+ctl.timeNow = 1001
+R.check("juste après notre keep-alive : on ne conclut rien",
+    obj:realActivitySinceOurLastEvent(), false)
+
+ctl.timeNow = 1010
+ctl.idle = 8.5
+R.check("dans la marge : on ne conclut pas non plus",
+    obj:realActivitySinceOurLastEvent(), false)
+ctl.idle = 7.5
+R.check("au-delà de la marge : on conclut",
+    obj:realActivitySinceOurLastEvent(), true)
+
+R.section("Entrée au vert sans keep-alive encore envoyé")
+-- Sans la borne d'entrée, « aucun keep-alive » vaudrait référence à
+-- l'époque, et l'application ressortirait du vert immédiatement.
+obj.lastKeepAliveTime = nil
+obj.keepaliveEnteredAt = 1000
+ctl.timeNow = 1005
+ctl.idle = 125            -- inactif depuis longtemps, c'est pour ça qu'on est vert
+R.check("on vient de passer au vert : rien à déduire",
+    obj:realActivitySinceOurLastEvent(), false)
+ctl.idle = 0.5            -- l'utilisateur revient avant le premier keep-alive
+R.check("mais un vrai retour est vu",
+    obj:realActivitySinceOurLastEvent(), true)
+
+R.section("Hors du vert, la règle ne s'applique pas")
+obj.currentState = obj.STATE.MONITORING
+R.check("en jaune : rien", obj:realActivitySinceOurLastEvent(), false)
+obj.currentState = obj.STATE.OFF
+R.check("éteint : rien", obj:realActivitySinceOurLastEvent(), false)
+
+R.section("Le filet tourne en vert et s'arrête en sortant")
+obj.currentState = obj.STATE.MONITORING
+obj.fastReturnWatcherEnabled = false
+ctl.everyTimers = {}
+obj:setState(obj.STATE.KEEPALIVE)
+R.check("un filet bat pendant le vert", obj.keepaliveExitTimer ~= nil, true)
+R.check("à la bonne cadence",
+    ctl.everyTimers[#ctl.everyTimers].delay, obj.keepaliveExitCheckInterval)
+R.check("l'instant d'entrée est noté", obj.keepaliveEnteredAt ~= nil, true)
+obj:setState(obj.STATE.MONITORING)
+R.check("il s'arrête en sortant", obj.keepaliveExitTimer, nil)
+R.check("et la référence est effacée", obj.keepaliveEnteredAt, nil)
+
+R.section("Aucun timer ne survit à l'arrêt")
+obj:setState(obj.STATE.KEEPALIVE)
+R.check("filet actif", obj.keepaliveExitTimer ~= nil, true)
+obj:stop()
+R.check("libéré à l'arrêt du Spoon", obj.keepaliveExitTimer, nil)
+obj.fastReturnWatcherEnabled = true
+
+
+------------------------------------------------------------
+R.section("La fenêtre aveugle se referme dès la séquence finie")
+------------------------------------------------------------
+-- Elle durait une seconde entière alors que la séquence synthétique
+-- dure environ 0,2 s. Une frappe arrivant à T+0,3 était jetée, et
+-- l'inférence ne peut pas la rattraper — trop proche de la nôtre.
+ctl.timeNow = nil
+obj.syntheticEventSettleDelay = 0.15
+ctl.now = 5000
+obj:openSyntheticEventWindow()
+R.check("ouverte pour toute la période de grâce",
+    obj.syntheticEventIgnoreUntil, 5000 + obj.syntheticEventGracePeriod)
+R.check("l'utilisateur est ignoré pendant ce temps",
+    obj:isSyntheticEventWindow(), true)
+
+ctl.now = 5000.2                       -- la séquence se termine
+obj:closeSyntheticEventWindow()
+R.check("refermée au temps de vol près",
+    obj.syntheticEventIgnoreUntil, 5000.2 + 0.15)
+ctl.now = 5000.4
+R.check("l'utilisateur est de nouveau écouté",
+    obj:isSyntheticEventWindow(), false)
+
+R.section("Refermer n'allonge jamais la fenêtre")
+ctl.now = 5000
+obj:openSyntheticEventWindow()
+local avant = obj.syntheticEventIgnoreUntil
+ctl.now = 5000.95                      -- appel tardif, fin de fenêtre
+obj:closeSyntheticEventWindow()
+R.check("la fenêtre n'est pas repoussée",
+    obj.syntheticEventIgnoreUntil, avant)
+
+R.section("Un curseur déplacé prouve le retour de l'utilisateur")
+-- Ce signal était jeté : si le curseur n'est plus où nous l'avons
+-- laissé, personne d'autre que l'utilisateur n'a pu le bouger.
+R.check("le code sait s'en servir",
+    type(obj.deferRealUserActivity), "function")
+
 R.finish()

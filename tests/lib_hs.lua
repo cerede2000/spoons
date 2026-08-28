@@ -292,6 +292,16 @@ function M.install(opts)
     })
     _G.hs = hs
 
+    -- ctl.timeNow pilote os.time() quand il est defini ; sinon
+    -- l'horloge reelle est conservee, pour ne rien changer aux
+    -- suites qui ne s'en servent pas.
+    local realOsTime = os.time
+    ctl.realOsTime = realOsTime
+    os.time = function(...)
+        if ctl.timeNow then return ctl.timeNow end
+        return realOsTime(...)
+    end
+
     -- Chargement des Spoons, comme le fait Hammerspoon : le fichier
     -- init.lua du depot peut ainsi etre execute tel quel.
     _G.spoon = {}

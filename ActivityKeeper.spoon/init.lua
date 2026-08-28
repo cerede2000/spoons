@@ -146,7 +146,7 @@ obj.__index = obj
 
 obj.name = "ActivityKeeper"
 
-obj.version = "4.15.0"
+obj.version = "4.16.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -179,9 +179,44 @@ obj.fastReturnWatcherEnabled = true
 
 obj.fastReturnThrottle = 0.20
 
+-- Sortie du vert : deduire au lieu de seuiller.
+--
+-- Les deux reglages ci-dessous decrivaient l'ancienne regle : sortir si
+-- l'activite datait de moins de realActivityReturnIdleThreshold ET si
+-- notre dernier keep-alive remontait a plus de
+-- postKeepAliveIdleIgnorePeriod. Deux fenetres etroites qui devaient se
+-- recouvrir, et qui laissaient echapper le cas le plus courant :
+--
+--   T      keep-alive envoye, fenetre synthetique ouverte 1 s
+--   T+0,3  l'utilisateur tape -- le tap ignore, c'est la fenetre
+--   T+8    l'idle redevient consultable
+--   T+10   idle vaut 10 s, plus que le seuil de 6 : rien
+--   ...    l'utilisateur ne tape plus, donc plus aucun evenement
+--
+-- L'application restait verte indefiniment, jusqu'a la frappe suivante.
+--
+-- La nouvelle regle n'a besoin d'aucune fenetre. macOS remet l'horloge
+-- d'inactivite a zero a chaque evenement, y compris les notres. Donc si
+-- cette horloge est plus RECENTE que notre dernier evenement synthetique,
+-- c'est que quelqu'un d'autre a agi : l'utilisateur. Vrai a tout instant,
+-- sans zone morte.
 obj.realActivityReturnIdleThreshold = 6
 
 obj.postKeepAliveIdleIgnorePeriod = 8
+
+-- Marge de l'inference, en secondes. os.time() a une resolution d'une
+-- seconde et un keep-alive s'etale sur environ 0,2 s : deux secondes
+-- absorbent l'un et l'autre sans jamais conclure a tort.
+obj.keepaliveExitMargin = 2
+
+-- Le tap reste la voie normale, immediate. Ce filet ne sert que
+-- lorsqu'il a manque l'evenement. Il ne lit qu'une horloge, donc il
+-- peut battre vite sans rien couter.
+obj.keepaliveExitCheckInterval = 1
+
+-- Instant d'entree en KEEPALIVE. Sert de reference tant qu'aucun
+-- keep-alive n'a encore ete envoye.
+obj.keepaliveEnteredAt = nil
 
 
 
@@ -220,6 +255,14 @@ obj.mouseReturnDelay = 0.15
 ------------------------------------------------------------
 
 obj.syntheticEventGracePeriod = 1.0
+
+-- Une fois la sequence synthetique terminee, la fenetre d'aveuglement
+-- n'a plus besoin de durer une seconde entiere : il suffit de laisser
+-- passer les evenements encore en vol. Sans cette fermeture, une frappe
+-- arrivant 0,3 s apres notre keep-alive etait jetee, et rien ne la
+-- rattrapait -- l'inference ne sait pas distinguer une activite si
+-- proche de la notre.
+obj.syntheticEventSettleDelay = 0.15
 
 
 
@@ -1517,11 +1560,23 @@ function obj:setState(newState)
 
     if newState == self.STATE.KEEPALIVE then
 
+        self.keepaliveEnteredAt =
+            os.time()
+
+
         self:startFastReturnWatcher()
 
         self:suspendInputWatcher()
 
+        self:startKeepaliveExitWatch()
+
     else
+
+        self.keepaliveEnteredAt =
+            nil
+
+
+        self:stopKeepaliveExitWatch()
 
         self:stopFastReturnWatcher()
 
@@ -1603,6 +1658,30 @@ function obj:isSyntheticEventWindow()
 
 end
 
+
+
+-- Referme la fenetre au plus tot : on ne garde que le temps de vol.
+-- Ne l'allonge jamais.
+
+function obj:closeSyntheticEventWindow()
+
+    local cible =
+        self:now()
+        +
+        (tonumber(self.syntheticEventSettleDelay) or 0.15)
+
+
+    if cible < self.syntheticEventIgnoreUntil then
+
+        self.syntheticEventIgnoreUntil =
+            cible
+
+    end
+
+
+    return self
+
+end
 
 
 function obj:openSyntheticEventWindow()
@@ -1717,6 +1796,148 @@ end
 -- Le tap rend désormais la main tout de suite ; le travail se fait au
 -- tour de boucle suivant.
 ------------------------------------------------------------
+
+-- Vrai si l'horloge d'inactivite de macOS est plus recente que notre
+-- dernier evenement synthetique : quelqu'un d'autre que nous a agi.
+--
+-- Reference : le dernier keep-alive, ou a defaut l'entree en KEEPALIVE
+-- tant qu'aucun n'a ete envoye. Sans cette seconde borne, une session
+-- fraichement passee au vert verrait "aucun keep-alive, donc reference
+-- a l'epoque" et conclurait aussitot a une activite.
+
+function obj:realActivitySinceOurLastEvent()
+
+    if self.currentState ~= self.STATE.KEEPALIVE then
+
+        return false
+
+    end
+
+
+    local reference =
+        math.max(
+            tonumber(self.lastKeepAliveTime) or 0,
+            tonumber(self.keepaliveEnteredAt) or 0
+        )
+
+
+    if reference <= 0 then
+
+        return false
+
+    end
+
+
+    local marge =
+        tonumber(self.keepaliveExitMargin) or 2
+
+
+    local depuis =
+        os.time() - reference
+
+
+    if depuis <= marge then
+
+        return false
+
+    end
+
+
+    local idle =
+        hs.host.idleTime()
+
+
+    if type(idle) ~= "number" then
+
+        return false
+
+    end
+
+
+    return idle < (depuis - marge)
+
+end
+
+
+function obj:checkKeepaliveExit()
+
+    if not self:realActivitySinceOurLastEvent() then
+
+        return self
+
+    end
+
+
+    self:log(
+        string.format(
+            "Retour utilisateur deduit : inactivite %.1f s, notre"
+            .. " dernier evenement remonte a %d s",
+            hs.host.idleTime(),
+            os.time() - math.max(
+                tonumber(self.lastKeepAliveTime) or 0,
+                tonumber(self.keepaliveEnteredAt) or 0
+            )
+        )
+    )
+
+
+    self:handleRealUserActivity(true)
+
+
+    return self
+
+end
+
+
+function obj:startKeepaliveExitWatch()
+
+    self:stopKeepaliveExitWatch()
+
+
+    local intervalle =
+        tonumber(self.keepaliveExitCheckInterval) or 1
+
+
+    if intervalle <= 0 then
+
+        return self
+
+    end
+
+
+    self.keepaliveExitTimer =
+        hs.timer.doEvery(
+            intervalle,
+            function()
+
+                self:checkKeepaliveExit()
+
+            end
+        )
+
+
+    return self
+
+end
+
+
+function obj:stopKeepaliveExitWatch()
+
+    if self.keepaliveExitTimer then
+
+        self.keepaliveExitTimer:stop()
+
+
+        self.keepaliveExitTimer =
+            nil
+
+    end
+
+
+    return self
+
+end
+
 
 function obj:deferRealUserActivity()
 
@@ -2220,6 +2441,12 @@ function obj:postActivityKey()
 
                             self:releaseActivityKey()
 
+
+                            -- La sequence clavier est finie : plus la
+                            -- peine d'ignorer l'utilisateur.
+
+                            self:closeSyntheticEventWindow()
+
                         end
 
                     )
@@ -2389,6 +2616,17 @@ function obj:sendMouseActivity()
                                 ) > 1 then
 
 
+                                -- Le curseur n'est plus ou nous l'avons
+                                -- laisse : personne d'autre que
+                                -- l'utilisateur n'a pu le bouger. Ce
+                                -- signal etait jete alors qu'il prouve
+                                -- le retour, et de facon certaine.
+
+                                self:closeSyntheticEventWindow()
+
+                                self:deferRealUserActivity()
+
+
                                 return
 
                             end
@@ -2406,6 +2644,9 @@ function obj:sendMouseActivity()
                             hs.mouse.absolutePosition(
                                 originalPosition
                             )
+
+
+                            self:closeSyntheticEventWindow()
 
                         end
 
@@ -5380,11 +5621,19 @@ function obj:checkIdleState()
         end
 
 
-        if idle <= self.realActivityReturnIdleThreshold
-            and (
-                not secondsSinceKeepAlive
-                or secondsSinceKeepAlive
-                    > self.postKeepAliveIdleIgnorePeriod
+        -- Meme regle que le filet rapide : l'horloge d'inactivite est-elle
+        -- plus recente que notre dernier evenement ? Les deux anciens
+        -- seuils sont conserves comme second recours, pour le cas ou
+        -- l'inference ne conclut pas alors que l'activite est manifeste.
+
+        if self:realActivitySinceOurLastEvent()
+            or (
+                idle <= self.realActivityReturnIdleThreshold
+                and (
+                    not secondsSinceKeepAlive
+                    or secondsSinceKeepAlive
+                        > self.postKeepAliveIdleIgnorePeriod
+                )
             ) then
 
 
@@ -5696,6 +5945,8 @@ function obj:disable()
 
     end
 
+
+    self:stopKeepaliveExitWatch()
 
     self:stopFastReturnWatcher()
 
@@ -7273,6 +7524,9 @@ function obj:stop()
     --------------------------------------------------------
     -- Timers
     --------------------------------------------------------
+
+    self:stopKeepaliveExitWatch()
+
 
     if self.clickTimer then
 
