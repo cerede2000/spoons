@@ -146,7 +146,7 @@ obj.__index = obj
 
 obj.name = "ActivityKeeper"
 
-obj.version = "4.14.0"
+obj.version = "4.15.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -418,6 +418,10 @@ obj.keyUpTimer =
 obj.inputWatcher =
     nil
 
+
+-- Un traitement d'activite reelle est deja programme : une rafale de
+-- frappes ne doit pas en empiler autant.
+obj.realActivityPending = false
 
 obj.fastReturnWatcher =
     nil
@@ -1617,7 +1621,12 @@ end
 -- ACTIVITÉ UTILISATEUR RÉELLE
 ------------------------------------------------------------
 
-function obj:handleRealUserActivity()
+-- dejaVerifie : l'appelant a deja ecarte la fenetre synthetique a
+-- l'instant ou l'evenement est arrive. Refaire le test plus tard
+-- risquerait de tomber dans une fenetre ouverte entre-temps par notre
+-- propre keep-alive, et d'ignorer une vraie frappe.
+
+function obj:handleRealUserActivity(dejaVerifie)
 
     if self.currentState == self.STATE.OFF then
 
@@ -1626,7 +1635,8 @@ function obj:handleRealUserActivity()
     end
 
 
-    if self:isSyntheticEventWindow() then
+    if not dejaVerifie
+        and self:isSyntheticEventWindow() then
 
         return
 
@@ -1680,6 +1690,62 @@ function obj:handleRealUserActivity()
         )
 
     end
+
+end
+
+
+
+------------------------------------------------------------
+-- SORTIR LE TRAVAIL DU CHEMIN DES ÉVÉNEMENTS
+--
+-- Un eventtap fait passer chaque frappe et chaque clic par le thread
+-- principal de Hammerspoon, et macOS attend la réponse avant de livrer
+-- l'événement. Au-delà du délai qu'il accorde, il désactive le tap.
+--
+-- Or handleRealUserActivity restaure les états énergétiques :
+-- restoreKeyboardAutoBrightness et restoreKeyboardBacklight passent par
+-- mac-brightnessctl, restoreLowPowerMode par « sudo pmset » -- tous par
+-- hs.execute, qui est bloquant. Le commentaire de handleRealUserActivity
+-- mesurait déjà 10 ms pour UN appel, et refusait pour cette raison d'y
+-- échantillonner le rétroéclairage. La restauration, elle, en enchaîne
+-- plusieurs, dont un sudo.
+--
+-- Pendant tout ce temps aucune frappe n'était transmise -- et c'est
+-- précisément l'instant où l'utilisateur recommence à taper, donc
+-- l'instant où il perd des touches.
+--
+-- Le tap rend désormais la main tout de suite ; le travail se fait au
+-- tour de boucle suivant.
+------------------------------------------------------------
+
+function obj:deferRealUserActivity()
+
+    if self.realActivityPending then
+
+        return self
+
+    end
+
+
+    self.realActivityPending =
+        true
+
+
+    hs.timer.doAfter(
+        0,
+        function()
+
+            self.realActivityPending =
+                false
+
+
+            self:handleRealUserActivity(true)
+
+        end
+    )
+
+
+    return self
 
 end
 
@@ -1774,7 +1840,7 @@ function obj:createInputWatcher()
                 end
 
 
-                self:handleRealUserActivity()
+                self:deferRealUserActivity()
 
 
                 return false
@@ -1869,7 +1935,7 @@ function obj:createFastReturnWatcher()
                     now
 
 
-                self:handleRealUserActivity()
+                self:deferRealUserActivity()
 
 
                 return false

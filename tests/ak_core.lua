@@ -24,7 +24,78 @@ keepaliveSetup(); obj.currentState=obj.STATE.MONITORING
 obj.lastKeyboardBrightnessSampleAt=nil
 ctl.shell={}
 obj:handleRealUserActivity()
-R.check("handleRealUserActivity ne lance rien", #ctl.shell, 0)
+R.check("handleRealUserActivity ne lance rien en surveillance", #ctl.shell, 0)
+
+------------------------------------------------------------
+R.section("Le tap ne restaure rien lui-même : c'est là qu'on perdait des touches")
+------------------------------------------------------------
+-- En KEEPALIVE, handleRealUserActivity restaure les états énergétiques :
+-- mac-brightnessctl pour le clavier, « sudo pmset » pour l'économie
+-- d'énergie -- tous par hs.execute, bloquant. Le faire dans le callback
+-- d'un eventtap retenait chaque frappe pendant ce temps, et c'est
+-- précisément l'instant où l'utilisateur recommence à taper.
+--
+-- Le test précédent passait à vide : il appelait handleRealUserActivity
+-- en MONITORING, état où la restauration ne s'exécute pas.
+obj.fastReturnWatcherEnabled=true
+obj.inputWatcher=nil; obj.fastReturnWatcher=nil
+ctl.eventtaps={}
+obj:createFastReturnWatcher()
+local tapRapide
+for _, t in ipairs(ctl.eventtaps) do
+    for _, ty in ipairs(t.types or {}) do
+        if ty == "keyDown" then tapRapide = t end
+    end
+end
+R.check("le tap rapide écoute bien les frappes", tapRapide ~= nil, true)
+
+keepaliveSetup()
+obj.currentState=obj.STATE.KEEPALIVE
+obj.lastFastReturnEventAt = 0
+obj.realActivityPending = false
+obj.syntheticEventIgnoreUntil = 0
+-- de quoi restaurer : c'est ce qui déclenche mac-brightnessctl
+obj.keyboardBacklightModified = true
+obj.savedKeyboardBrightness = 0.42
+ctl.shell={}; ctl.timers={}
+tapRapide.fn()
+R.check("rien de bloquant dans le tap", #ctl.shell, 0)
+R.check("l'état n'a pas encore basculé", obj.currentState, obj.STATE.KEEPALIVE)
+R.check("un travail est programmé", obj.realActivityPending, true)
+
+ctl.fireOnly(0)
+R.check("le travail a bien eu lieu ensuite", obj.currentState, obj.STATE.MONITORING)
+R.check("et la restauration aussi", #ctl.shell > 0, true)
+R.check("le verrou est rendu", obj.realActivityPending, false)
+
+R.section("Une rafale de frappes ne programme qu'un seul travail")
+keepaliveSetup()
+obj.currentState=obj.STATE.KEEPALIVE
+obj.lastFastReturnEventAt = 0
+obj.realActivityPending = false
+obj.syntheticEventIgnoreUntil = 0
+obj.fastReturnThrottle = 0
+ctl.timers={}
+for _ = 1, 20 do tapRapide.fn() end
+R.check("vingt frappes, un seul travail programmé", #ctl.timers, 1)
+ctl.fireOnly(0)
+
+R.section("Le watcher ordinaire ne bloque pas davantage")
+obj.inputWatcher=nil
+ctl.eventtaps={}
+obj:createInputWatcher()
+local tapLent = ctl.eventtaps[#ctl.eventtaps]
+keepaliveSetup()
+obj.currentState=obj.STATE.KEEPALIVE
+obj.fastReturnWatcherEnabled=false
+obj.realActivityPending=false
+obj.syntheticEventIgnoreUntil=0
+ctl.shell={}; ctl.timers={}
+tapLent.fn()
+R.check("rien de bloquant dans le tap", #ctl.shell, 0)
+ctl.fireOnly(0)
+R.check("mais le travail se fait", obj.currentState, obj.STATE.MONITORING)
+obj.fastReturnWatcherEnabled=true
 
 R.section("Un seul tap système à la fois")
 obj.fastReturnWatcherEnabled=true
