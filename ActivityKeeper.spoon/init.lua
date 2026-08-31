@@ -146,7 +146,7 @@ obj.__index = obj
 
 obj.name = "ActivityKeeper"
 
-obj.version = "4.16.0"
+obj.version = "4.17.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -1705,7 +1705,11 @@ end
 -- risquerait de tomber dans une fenetre ouverte entre-temps par notre
 -- propre keep-alive, et d'ignorer une vraie frappe.
 
-function obj:handleRealUserActivity(dejaVerifie)
+-- origine : d'ou vient la conclusion. Cinq chemins peuvent faire
+-- sortir du vert, et le journal ne disait pas lequel avait parle. Sans
+-- cela, une sortie intempestive est indiagnosticable.
+
+function obj:handleRealUserActivity(dejaVerifie, origine)
 
     if self.currentState == self.STATE.OFF then
 
@@ -1750,6 +1754,11 @@ function obj:handleRealUserActivity(dejaVerifie)
 
         self:log(
             "Activité utilisateur réelle détectée"
+            .. " (origine : "
+            .. tostring(origine or "inconnue")
+            .. ", inactivité "
+            .. string.format("%.1f", hs.host.idleTime() or -1)
+            .. " s)"
         )
 
 
@@ -1881,7 +1890,7 @@ function obj:checkKeepaliveExit()
     )
 
 
-    self:handleRealUserActivity(true)
+    self:handleRealUserActivity(true, "inference")
 
 
     return self
@@ -1939,7 +1948,7 @@ function obj:stopKeepaliveExitWatch()
 end
 
 
-function obj:deferRealUserActivity()
+function obj:deferRealUserActivity(origine)
 
     if self.realActivityPending then
 
@@ -1960,7 +1969,7 @@ function obj:deferRealUserActivity()
                 false
 
 
-            self:handleRealUserActivity(true)
+            self:handleRealUserActivity(true, origine)
 
         end
     )
@@ -2061,7 +2070,7 @@ function obj:createInputWatcher()
                 end
 
 
-                self:deferRealUserActivity()
+                self:deferRealUserActivity("tap ordinaire")
 
 
                 return false
@@ -2156,7 +2165,7 @@ function obj:createFastReturnWatcher()
                     now
 
 
-                self:deferRealUserActivity()
+                self:deferRealUserActivity("tap rapide")
 
 
                 return false
@@ -2572,6 +2581,35 @@ function obj:sendMouseActivity()
 
 
                 ------------------------------------------------
+                -- Ou le curseur a-t-il REELLEMENT atterri.
+                --
+                -- On demande original.x + 1. Au bord droit de
+                -- l'ecran, macOS ramene le curseur a sa place :
+                -- il n'atteint jamais temporaryPosition. Comparer
+                -- a la position DEMANDEE faisait alors conclure a
+                -- chaque keep-alive que l'utilisateur avait bouge
+                -- la souris.
+                ------------------------------------------------
+
+                local positionAtteinte =
+                    hs.mouse.absolutePosition()
+                    or temporaryPosition
+
+
+                -- Le deplacement a-t-il eu lieu ? Sinon ce signal
+                -- ne prouve plus rien et on s'interdit de s'en
+                -- servir.
+
+                local deplacementEffectif =
+                    math.abs(
+                        positionAtteinte.x - originalPosition.x
+                    ) > 0.5
+                    or math.abs(
+                        positionAtteinte.y - originalPosition.y
+                    ) > 0.5
+
+
+                ------------------------------------------------
                 -- Retour
                 ------------------------------------------------
 
@@ -2608,23 +2646,29 @@ function obj:sendMouseActivity()
                             if not currentPosition
                                 or math.abs(
                                     currentPosition.x
-                                    - temporaryPosition.x
+                                    - positionAtteinte.x
                                 ) > 1
                                 or math.abs(
                                     currentPosition.y
-                                    - temporaryPosition.y
+                                    - positionAtteinte.y
                                 ) > 1 then
 
 
-                                -- Le curseur n'est plus ou nous l'avons
-                                -- laisse : personne d'autre que
-                                -- l'utilisateur n'a pu le bouger. Ce
-                                -- signal etait jete alors qu'il prouve
-                                -- le retour, et de facon certaine.
-
                                 self:closeSyntheticEventWindow()
 
-                                self:deferRealUserActivity()
+
+                                -- Le curseur n'est plus ou nous l'avons
+                                -- laisse : personne d'autre n'a pu le
+                                -- bouger. Mais seulement si nous l'avons
+                                -- vraiment deplace : un deplacement
+                                -- refuse par macOS laisse le curseur ou
+                                -- il etait, ce qui n'apprend rien.
+
+                                if deplacementEffectif then
+
+                                    self:deferRealUserActivity("souris deplacee")
+
+                                end
 
 
                                 return
@@ -5639,6 +5683,14 @@ function obj:checkIdleState()
 
             self:log(
                 "Activité utilisateur détectée par idle macOS"
+                .. " (origine : "
+                .. (self:realActivitySinceOurLastEvent()
+                    and "inference" or "anciens seuils")
+                .. ", inactivité "
+                .. string.format("%.1f", idle)
+                .. " s, notre dernier événement remonte à "
+                .. tostring(secondsSinceKeepAlive or "?")
+                .. " s)"
             )
 
 

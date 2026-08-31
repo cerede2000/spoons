@@ -225,7 +225,16 @@ function M.install(opts)
                 return f end },
             { __index = function(_, k) return k end }) },
         hotkey = { bind=function() return { delete=function() end } end },
-        mouse = { absolutePosition=function()
+        -- absolutePosition est getter ET setter, comme la vraie.
+        -- ctl.mouseClamped simule un curseur au bord de l'ecran : macOS
+        -- refuse alors le deplacement et le curseur ne bouge pas.
+        mouse = { absolutePosition=function(p)
+                      if p then
+                          if not ctl.mouseClamped then
+                              ctl.mousePosition = { x = p.x, y = p.y }
+                          end
+                          return
+                      end
                       return { x = ctl.mousePosition.x, y = ctl.mousePosition.y } end,
                   setAbsolutePosition=function(p) ctl.mousePosition = p end },
         notify = { new=function() return { send=function() end } end },

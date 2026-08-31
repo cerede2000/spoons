@@ -230,4 +230,94 @@ R.section("Un curseur déplacé prouve le retour de l'utilisateur")
 R.check("le code sait s'en servir",
     type(obj.deferRealUserActivity), "function")
 
+
+------------------------------------------------------------
+R.section("Curseur au bord de l'écran : le keep-alive ne ment plus")
+------------------------------------------------------------
+-- On demande original.x + 1. Au bord droit, macOS refuse et le curseur
+-- reste où il est. Comparer à la position DEMANDÉE faisait alors
+-- conclure, à chaque keep-alive, que l'utilisateur avait bougé la
+-- souris : sortie du vert, puis retour au vert cinq secondes plus tard
+-- puisque l'inactivité restait haute — une boucle de popups.
+ctl.timeNow = nil
+obj.currentState = obj.STATE.KEEPALIVE
+obj.mouseMovePixels = 1
+obj.mouseReturnDelay = 0.15
+obj.isMouseEnabled = function() return true end
+
+local function sequenceSouris()
+    obj.realActivityPending = false
+    ctl.timers = {}
+    obj:sendMouseActivity()
+    ctl.fireOnly(obj.mouseReturnDelay)
+end
+
+-- Bord d'écran : le déplacement est refusé.
+ctl.mouseClamped = true
+ctl.mousePosition = { x = 1511, y = 300 }
+sequenceSouris()
+R.check("déplacement refusé : aucune activité déduite",
+    obj.realActivityPending, false)
+R.check("l'application reste verte", obj.currentState, obj.STATE.KEEPALIVE)
+
+-- Cas normal : le curseur bouge, puis personne n'y touche.
+ctl.mouseClamped = false
+ctl.mousePosition = { x = 400, y = 300 }
+sequenceSouris()
+R.check("personne n'a touché la souris : rien de déduit",
+    obj.realActivityPending, false)
+R.check("et le curseur est remis à sa place", ctl.mousePosition.x, 400)
+
+-- L'utilisateur bouge vraiment la souris pendant notre séquence.
+obj.realActivityPending = false
+ctl.mousePosition = { x = 400, y = 300 }
+ctl.timers = {}
+obj:sendMouseActivity()
+ctl.mousePosition = { x = 900, y = 500 }     -- l'utilisateur est revenu
+ctl.fireOnly(obj.mouseReturnDelay)
+R.check("un vrai déplacement est vu", obj.realActivityPending, true)
+R.check("et le curseur n'est pas téléporté en arrière",
+    ctl.mousePosition.x, 900)
+ctl.fireOnly(0)
+R.check("l'application repasse en jaune", obj.currentState, obj.STATE.MONITORING)
+
+
+------------------------------------------------------------
+R.section("Le journal nomme le chemin qui a fait sortir du vert")
+------------------------------------------------------------
+-- Cinq chemins peuvent faire sortir du vert. Le journal disait
+-- seulement « Activité utilisateur réelle détectée » : impossible de
+-- savoir lequel avait parlé, donc impossible de diagnostiquer une
+-- sortie intempestive.
+ctl.timeNow = nil
+local function sortie(origine)
+    obj.currentState = obj.STATE.KEEPALIVE
+    ctl.printed = {}
+    obj:handleRealUserActivity(true, origine)
+    return table.concat(ctl.printed, " ")
+end
+
+R.check("origine du tap rapide",
+    sortie("tap rapide"):find("origine : tap rapide", 1, true) ~= nil, true)
+R.check("origine du tap ordinaire",
+    sortie("tap ordinaire"):find("origine : tap ordinaire", 1, true) ~= nil, true)
+R.check("origine de l'inférence",
+    sortie("inference"):find("origine : inference", 1, true) ~= nil, true)
+R.check("origine de la souris",
+    sortie("souris deplacee"):find("origine : souris deplacee", 1, true) ~= nil, true)
+R.check("origine inconnue signalée comme telle",
+    sortie(nil):find("origine : inconnue", 1, true) ~= nil, true)
+R.check("l'inactivité mesurée est jointe",
+    sortie("inference"):find("inactivité", 1, true) ~= nil, true)
+
+R.section("L'origine traverse le report")
+obj.currentState = obj.STATE.KEEPALIVE
+obj.realActivityPending = false
+ctl.timers = {}
+ctl.printed = {}
+obj:deferRealUserActivity("tap rapide")
+ctl.fireOnly(0)
+R.check("elle survit au tour de boucle",
+    table.concat(ctl.printed, " "):find("origine : tap rapide", 1, true) ~= nil, true)
+
 R.finish()
