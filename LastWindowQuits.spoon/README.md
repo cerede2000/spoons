@@ -201,6 +201,31 @@ Le switcher, lui, se sert de cette meme API sans risque : il ne pose que
 la question de la **position** d'une fenetre dont il sait deja qu'elle
 est vivante, et une reponse vide y vaut « ici ».
 
+### Le balayage complet n'est jamais interrompu
+
+Un balayage complet -- celui du demarrage, et celui qui revient toutes
+les trente secondes -- etablit la reference : combien de fenetres chaque
+application possede. L'interrompre laisse cette reference incomplete,
+et une application qui n'y figure pas n'est plus interrogee par les
+balayages partiels, qui ne s'occupent que de celles dont on sait
+qu'elles ont des fenetres. Elle devient invisible.
+
+Une version bornait le temps de TOUS les balayages. Au demarrage les
+caches d'accessibilite sont froids -- 2626 ms mesurees pour 57
+applications, contre 36 ms une fois chauds -- donc le budget sautait des
+les premieres applications, et le Spoon demarrait sans savoir quelles
+fenetres existaient. Il ne fermait plus rien.
+
+`scanTimeBudget` ne s'applique donc qu'aux balayages **partiels**. Ils
+n'interrogent que les applications ayant deja des fenetres connues :
+les interrompre ne perd aucune reference, et borne le temps passe sur
+le thread principal -- celui-la meme qui livre les frappes.
+
+Le demarrage ne balaie qu'une fois. `primeSeenApps` et le balayage
+initial interrogeaient tous deux l'ensemble des applications, et
+appelaient `markSeen` dans exactement les memes cas : cinq secondes de
+thread principal prises juste apres un rechargement, pour rien.
+
 ### Ce qui reste sur
 
 Deux choses, et elles n'ont besoin d'aucune API privee :

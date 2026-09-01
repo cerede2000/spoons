@@ -167,59 +167,141 @@ obj.honourTransientWindowApps = true
 
 
 ------------------------------------------------------------
-R.section("Un balayage lent rend la main au lieu de bloquer le clavier")
+R.section("Le balayage complet n'est JAMAIS interrompu")
 ------------------------------------------------------------
--- Chaque application interrogée est un aller-retour d'accessibilité,
--- donc un appel vers un AUTRE processus, sur le thread principal de
--- Hammerspoon — celui-là même qui livre les frappes. Mesuré sur 57
--- applications : 19 ms en moyenne, 2626 ms à froid. Un balayage long
--- fait perdre des touches.
+-- C'est lui qui établit la référence : combien de fenêtres chaque
+-- application possède. L'interrompre laisse cette référence incomplète,
+-- et une application absente de la référence n'est plus interrogée par
+-- les balayages partiels — qui ne s'occupent que de celles dont on sait
+-- qu'elles ont des fenêtres. Elle devient invisible.
+--
+-- Au démarrage les caches d'accessibilité sont froids : 2626 ms
+-- mesurées pour 57 applications, contre 36 ms une fois chauds. Le
+-- budget sautait dès les premières applications et LastWindowQuits
+-- démarrait sans savoir quelles fenêtres existaient.
+fresh({"Edge","Firefox","Claude","Notes"})
+obj.scanTimeBudget = 0.15
+
+local vraiCount = obj.countWindows
+local function lent()
+    obj.countWindows = function(self, app)
+        ctl.now = ctl.now + 0.1        -- chaque application coûte 0,1 s
+        return vraiCount(self, app)
+    end
+end
+
+lent()
+ctl.printed = {}
+obj.windowCounts = {}
+obj:scanWindowTransitions(true)          -- balayage de démarrage
+obj.countWindows = vraiCount
+
+R.check("aucune interruption",
+    table.concat(ctl.printed, " "):find("Balayage interrompu", 1, true) ~= nil, false)
+
+local connus = 0
+for _ in pairs(obj.windowCounts) do connus = connus + 1 end
+R.check("la référence couvre les quatre applications", connus, 4)
+R.check("et chacune avec sa fenêtre", obj.windowCounts["com.t.Notes"], 1)
+
+R.section("Une fermeture est donc bien vue après le démarrage")
+-- C'est le test de bout en bout : si la référence est complète, la
+-- perte de la dernière fenêtre est détectée normalement.
+ctl.runningApps[4]._windows = {}          -- Notes perd sa fenêtre
+obj.seenApps["com.t.Notes"] = true
+obj.lastFullScanAt = ctl.now              -- la suite est en balayage partiel
+for _ = 1, obj.quitConfirmations do
+    obj:scanWindowTransitions(false)
+    plusTard()
+end
+ctl.fireTimers()
+R.check("Notes est fermée", #ctl.killed, 1)
+R.check("la bonne", ctl.killed[1], "Notes")
+
+------------------------------------------------------------
+R.section("Un balayage partiel lent, lui, rend la main")
+------------------------------------------------------------
+-- Il n'interroge que les applications ayant déjà des fenêtres connues :
+-- l'interrompre ne perd aucune référence, et borne le temps passé sur
+-- le thread principal — celui-là même qui livre les frappes.
 fresh({"Edge","Firefox","Claude","Notes"})
 obj.scanTimeBudget = 0.15
 obj.windowCounts = { ["com.t.Edge"] = 1, ["com.t.Firefox"] = 1,
                      ["com.t.Claude"] = 1, ["com.t.Notes"] = 1 }
-
--- Chaque application coûte 0,1 s : le budget saute à la deuxième.
-local vraiCount = obj.countWindows
-obj.countWindows = function(self, app)
-    ctl.now = ctl.now + 0.1
-    return vraiCount(self, app)
-end
+obj.lastFullScanAt = ctl.now             -- force un balayage partiel
+lent()
 ctl.printed = {}
-obj:scanWindowTransitions(true)
+obj:scanWindowTransitions(false)
 obj.countWindows = vraiCount
 
 R.check("l'interruption est journalisée",
     table.concat(ctl.printed, " "):find("Balayage interrompu", 1, true) ~= nil, true)
 R.check("aucune fermeture programmée", armed(), 0)
 
--- Rien n'est perdu : les applications non visitées gardent leur compte.
-local connus = 0
+connus = 0
 for _ in pairs(obj.windowCounts) do connus = connus + 1 end
 R.check("les quatre comptages sont conservés", connus, 4)
 R.check("y compris ceux qu'on n'a pas eu le temps de voir",
     obj.windowCounts["com.t.Notes"], 1)
 
-R.section("Un balayage rapide n'est jamais interrompu")
+R.section("Un balayage partiel rapide n'est pas interrompu")
 fresh({"Edge","Firefox"})
 obj.scanTimeBudget = 0.15
+obj.windowCounts = { ["com.t.Edge"] = 1, ["com.t.Firefox"] = 1 }
+obj.lastFullScanAt = ctl.now
 ctl.printed = {}
-obj:scanWindowTransitions(true)
+obj:scanWindowTransitions(false)
 R.check("aucune interruption",
     table.concat(ctl.printed, " "):find("Balayage interrompu", 1, true) ~= nil, false)
 
 R.section("Budget désactivable")
 fresh({"Edge","Firefox","Claude","Notes"})
 obj.scanTimeBudget = 0
-obj.countWindows = function(self, app)
-    ctl.now = ctl.now + 0.5
-    return vraiCount(self, app)
-end
+obj.windowCounts = { ["com.t.Edge"] = 1, ["com.t.Firefox"] = 1,
+                     ["com.t.Claude"] = 1, ["com.t.Notes"] = 1 }
+obj.lastFullScanAt = ctl.now
+lent()
 ctl.printed = {}
-obj:scanWindowTransitions(true)
+obj:scanWindowTransitions(false)
 obj.countWindows = vraiCount
 R.check("sans budget, le balayage va jusqu'au bout",
     table.concat(ctl.printed, " "):find("Balayage interrompu", 1, true) ~= nil, false)
 obj.scanTimeBudget = 0.15
+
+
+------------------------------------------------------------
+R.section("Le démarrage ne balaie qu'une fois")
+------------------------------------------------------------
+-- primeSeenApps interroge toutes les applications pour retenir celles
+-- qui ont des fenêtres. Le balayage initial les interroge toutes à
+-- nouveau, et appelle markSeen dans exactement les mêmes cas. Mesuré :
+-- 2626 ms par balayage à froid, pour 57 applications. En faire deux au
+-- démarrage, c'est cinq secondes de thread principal pris juste après
+-- un rechargement — donc autant de frappes perdues.
+fresh({"Edge","Firefox"})
+obj.windowTransitionFallbackEnabled = true
+obj.seenApps = {}
+obj.windowCounts = {}
+ctl.axCalls = 0
+obj:start()
+local avecFilet = ctl.axCalls
+R.check("les applications avec fenêtres sont connues",
+    obj.seenApps["com.t.Edge"], true)
+R.check("et leur compte est établi", obj.windowCounts["com.t.Edge"], 1)
+obj:stop()
+
+-- Sans le filet, personne d'autre n'établit la liste : primeSeenApps
+-- reste indispensable.
+fresh({"Edge","Firefox"})
+obj.windowTransitionFallbackEnabled = false
+obj.seenApps = {}
+ctl.axCalls = 0
+obj:start()
+R.check("sans filet, la liste est quand même établie",
+    obj.seenApps["com.t.Edge"], true)
+obj:stop()
+obj.windowTransitionFallbackEnabled = true
+
+R.check("un seul balayage suffit désormais", avecFilet > 0, true)
 
 R.finish()

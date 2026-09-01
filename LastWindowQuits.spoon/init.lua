@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.16.0"
+obj.version = "1.17.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -142,6 +142,25 @@ obj.maxSimultaneousScanQuits = 2
 -- SOMME : passe le budget, le balayage s'arrete et reprend au tick
 -- suivant. Les applications non visitees gardent leur comptage
 -- precedent, donc rien n'est perdu ni conclu a tort.
+--
+-- Le budget ne s'applique QU'AUX balayages partiels.
+--
+-- Un balayage complet -- celui du demarrage et celui qui revient toutes
+-- les trente secondes -- etablit la reference : combien de fenetres
+-- chaque application possede. L'interrompre laisse cette reference
+-- incomplete, et une application absente de la reference n'est plus
+-- interrogee par les balayages partiels, qui ne s'occupent que de
+-- celles dont on sait qu'elles ont des fenetres. Elle devient donc
+-- invisible.
+--
+-- Au demarrage, les caches d'accessibilite sont froids : 2626 ms
+-- mesurees pour 57 applications, contre 36 ms une fois chauds. Le
+-- budget sautait donc des les premieres applications et LastWindowQuits
+-- demarrait sans savoir quelles fenetres existaient. Il ne fermait plus
+-- rien.
+--
+-- Un balayage partiel, lui, n'interroge que les applications ayant deja
+-- des fenetres connues : les interrompre ne perd aucune reference.
 obj.scanTimeBudget = 0.15
 
 -- Suspend la surveillance pendant la veille, le verrouillage et
@@ -2400,6 +2419,7 @@ function obj:scanWindowTransitions(initial)
         -- aucune ne peut etre vue comme ayant perdu ses fenetres.
 
         if not interrompu
+            and not fullScan
             and budget > 0
             and (self:now() - debutBalayage) > budget then
 
@@ -5390,7 +5410,29 @@ function obj:start()
 
     self:createPowerWatcher()
 
-    self:primeSeenApps()
+
+    -- Deux balayages complets coup sur coup.
+    --
+    -- primeSeenApps interroge toutes les applications pour retenir
+    -- celles qui ont deja des fenetres. Le balayage initial de
+    -- createWindowTransitionFallback les interroge toutes a nouveau --
+    -- et appelle markSeen exactement dans les memes cas.
+    --
+    -- Mesure : un balayage a froid coute 2626 ms pour 57 applications.
+    -- En faire deux au demarrage, c'est cinq secondes de thread
+    -- principal pris juste apres un rechargement, donc autant de
+    -- frappes perdues.
+    --
+    -- Le second suffit. Le premier ne sert que lorsque le filet de
+    -- balayage est desactive : il n'y a alors personne d'autre pour
+    -- etablir la liste.
+
+    if not self:isWindowTransitionFallbackEnabled() then
+
+        self:primeSeenApps()
+
+    end
+
 
     self:createWindowTransitionFallback()
 
