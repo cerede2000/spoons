@@ -289,6 +289,34 @@ documentee reste en place si la lecture directe disparait un jour.
 `hs.spaces` repose sur les API privees de SkyLight. S'il devient
 indisponible, tout ce qui precede s'efface et le switcher continue.
 
+### Repetition de touche
+
+```lua
+spoon.WindowSwitcher.stepThrottleSeconds = 0.06
+```
+
+L'etranglement ne portait que sur les sessions **ouvertes**. Une session
+qui venait de se fermer laissait chaque repetition de la touche relancer
+un inventaire complet des fenetres, puis activer une fenetre. A la
+cadence de repetition du clavier -- une quinzaine par seconde -- le
+thread principal saturait, d'autres evenements etaient manques, et la
+chose s'entretenait toute seule : une tempete d'activations que rien
+n'arretait avant le relachement de la touche.
+
+Mesure, vingt repetitions dans le meme instant :
+
+| | inventaires |
+|---|---|
+| avant | **20** |
+| apres | 1 |
+
+Le premier appel reste immediat.
+
+Deuxieme garde : defiler alors que le modificateur n'est plus tenu n'a
+aucun sens, la session aurait deja du se fermer. C'est le symptome
+d'une repetition qui a survecu au relachement, ou d'un evenement de
+relachement manque. Le switcher ferme au lieu d'ajouter un tour.
+
 ### Ordre de la grille
 
 L'ordre vient de la pile du WindowServer, pas du filtre.

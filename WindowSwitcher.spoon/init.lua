@@ -70,7 +70,7 @@ local unpackTable =
 
 obj.name = "WindowSwitcher"
 
-obj.version = "0.21.0"
+obj.version = "0.22.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -7143,13 +7143,45 @@ function obj:beginSession(direction)
 end
 
 
+-- L'etranglement ne portait que sur les sessions ouvertes. Une session
+-- qui vient de se fermer laissait donc chaque repetition de la touche
+-- relancer un beginSession complet -- c'est-a-dire un inventaire de
+-- toutes les fenetres -- puis activer une fenetre. A la cadence de
+-- repetition du clavier, une quinzaine par seconde, le thread principal
+-- saturait, d'autres evenements etaient manques, et la chose
+-- s'entretenait toute seule : une tempete d'activations que rien
+-- n'arretait avant le relachement de la touche.
+--
+-- Le premier appel reste immediat : lastStepAt est nil au demarrage.
+
 function obj:step(direction)
 
     local now =
         timer.secondsSinceEpoch()
 
 
-    if self.entries and self.lastStepAt and now - self.lastStepAt < self.stepThrottleSeconds then
+    if self.lastStepAt
+        and now - self.lastStepAt < self.stepThrottleSeconds then
+
+        return
+
+    end
+
+
+    -- Defiler alors que le modificateur n'est plus tenu n'a aucun sens :
+    -- la session aurait deja du se fermer. C'est le symptome d'une
+    -- repetition qui a survecu au relachement, ou d'un evenement de
+    -- relachement manque. On ferme au lieu d'ajouter un tour.
+
+    if self.entries
+        and not self:modifiersPressed() then
+
+        self.lastStepAt =
+            now
+
+
+        self:commit()
+
 
         return
 

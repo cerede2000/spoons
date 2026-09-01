@@ -797,4 +797,79 @@ R.check("filtre monté d'avance, pas au premier Alt+Tab", ctl.filtersCreated, 1)
 R.check("raccourcis en place", obj.hotkeys.forward ~= nil, true)
 R.check("raccourci arrière en place", obj.hotkeys.backward ~= nil, true)
 
+
+------------------------------------------------------------
+R.section("Tempête d'activations : la répétition sans session n'était pas bridée")
+------------------------------------------------------------
+-- L'étranglement ne portait que sur les sessions ouvertes. Une session
+-- qui vient de se fermer laissait chaque répétition de la touche
+-- relancer un beginSession complet — un inventaire de toutes les
+-- fenêtres — puis activer une fenêtre. À la cadence du clavier, une
+-- quinzaine par seconde : le thread principal saturait, d'autres
+-- événements étaient manqués, et la chose s'entretenait toute seule.
+nouvelleSession()
+local inventaires = 0
+local vraiCollect = obj.collectWindows
+obj.collectWindows = function(self)
+    inventaires = inventaires + 1
+    return vraiCollect(self)
+end
+
+obj.entries = nil
+obj.lastStepAt = nil
+ctl.now = ctl.now + 10
+-- vingt répétitions dans le même instant, sans session ouverte
+for _ = 1, 20 do
+    obj.entries = nil
+    obj:step(1)
+end
+obj.collectWindows = vraiCollect
+R.check("un seul inventaire malgré vingt répétitions", inventaires, 1)
+
+R.section("Le premier appel reste immédiat")
+nouvelleSession()
+obj.entries = nil
+obj.lastStepAt = nil
+obj:step(1)
+R.check("la session s'ouvre sans attendre", obj.entries ~= nil, true)
+
+R.section("Une répétition qui survit au relâchement ferme au lieu de défiler")
+-- Symptôme d'un événement de relâchement manqué : la touche continue de
+-- se répéter alors que le modificateur n'est plus tenu. Défiler n'a
+-- alors aucun sens — la session aurait déjà dû se fermer.
+nouvelleSession()
+obj.lastStepAt = nil
+obj:step(1)
+local visee = obj.entries[obj.selectedIndex].id
+ctl.modifierRaw = 0                       -- le modificateur est relâché
+ctl.now = ctl.now + 1
+active = {}
+obj:step(1)
+R.check("la session est close", obj.entries, nil)
+R.check("c'est la fenêtre déjà sélectionnée qui est activée",
+    #active > 0, true)
+R.check("et pas la suivante", visee, 2)
+
+R.section("Modificateur tenu : le défilement reste normal")
+nouvelleSession()
+ctl.modifierRaw = 524288
+obj.lastStepAt = nil
+obj:step(1)
+local avant = obj.selectedIndex
+ctl.now = ctl.now + 1
+obj:step(1)
+R.check("la sélection avance", obj.selectedIndex ~= avant, true)
+R.check("et la session reste ouverte", obj.entries ~= nil, true)
+obj:commit()
+
+R.section("Le verrou majuscules seul ne compte pas comme modificateur")
+nouvelleSession()
+obj.lastStepAt = nil
+obj:step(1)
+ctl.modifierRaw = 65536                   -- verrou majuscules seul
+ctl.now = ctl.now + 1
+obj:step(1)
+R.check("la session se ferme", obj.entries, nil)
+ctl.modifierRaw = 524288
+
 R.finish()
