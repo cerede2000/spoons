@@ -200,6 +200,8 @@ R.section("La fenêtre aveugle se referme dès la séquence finie")
 -- l'inférence ne peut pas la rattraper — trop proche de la nôtre.
 ctl.timeNow = nil
 obj.syntheticEventSettleDelay = 0.15
+-- Le raccourcissement n'est permis qu'une fois la marque prouvée.
+obj.syntheticMarkWorks = true
 ctl.now = 5000
 obj:openSyntheticEventWindow()
 R.check("ouverte pour toute la période de grâce",
@@ -319,5 +321,81 @@ obj:deferRealUserActivity("tap rapide")
 ctl.fireOnly(0)
 R.check("elle survit au tour de boucle",
     table.concat(ctl.printed, " "):find("origine : tap rapide", 1, true) ~= nil, true)
+
+
+------------------------------------------------------------
+R.section("Nos propres événements sont reconnus à leur marque, pas à la montre")
+------------------------------------------------------------
+-- La fenêtre de grâce suppose que nos événements arrivent au tap avant
+-- son échéance. Raccourcie à la fin de la séquence, elle laissait
+-- passer ceux qui arrivaient en retard : ActivityKeeper réagissait à
+-- lui-même et sortait du vert alors que personne n'avait touché la
+-- machine — jaune, vert, jaune, vert.
+ctl.timeNow = nil
+ctl.markLost = false
+ctl.postedEvents = {}
+ctl.keyEvents = {}
+obj.syntheticMarkWorks = false
+obj.currentState = obj.STATE.KEEPALIVE
+obj.fastReturnWatcherEnabled = true
+obj.fastReturnThrottle = 0
+obj.realActivityPending = false
+obj.fastReturnWatcher = nil
+ctl.eventtaps = {}
+obj:createFastReturnWatcher()
+local tapRapide2 = ctl.eventtaps[#ctl.eventtaps]
+
+-- On émet un keep-alive clavier : les événements portent la marque.
+obj.activityKey = "shift"
+obj:postActivityKey()
+R.check("un événement a été émis", #ctl.postedEvents > 0, true)
+local notre = ctl.postedEvents[#ctl.postedEvents]
+R.check("il porte notre marque",
+    notre:getProperty("eventSourceUserData"), obj.syntheticMark)
+
+-- Il arrive au tap BIEN APRÈS la fin de la fenêtre de grâce.
+ctl.now = ctl.now + 60
+obj.realActivityPending = false
+tapRapide2.fn(notre)
+R.check("la fenêtre de grâce est expirée", obj:isSyntheticEventWindow(), false)
+R.check("mais il est reconnu comme le nôtre", obj.realActivityPending, false)
+R.check("l'application reste verte", obj.currentState, obj.STATE.KEEPALIVE)
+R.check("et le mécanisme est désormais prouvé", obj.syntheticMarkWorks, true)
+
+R.section("Un vrai événement de l'utilisateur passe toujours")
+local vrai = { getProperty = function() return nil end }
+obj.realActivityPending = false
+obj.lastFastReturnEventAt = 0
+tapRapide2.fn(vrai)
+R.check("il est bien vu", obj.realActivityPending, true)
+
+R.section("Tant que la marque n'est pas prouvée, la fenêtre reste entière")
+-- La raccourcir avant d'avoir la preuve, c'est reprendre le risque.
+obj.syntheticMarkWorks = false
+ctl.now = 6000
+obj:openSyntheticEventWindow()
+local pleine = obj.syntheticEventIgnoreUntil
+ctl.now = 6000.2
+obj:closeSyntheticEventWindow()
+R.check("la fenêtre n'est pas raccourcie",
+    obj.syntheticEventIgnoreUntil, pleine)
+
+obj.syntheticMarkWorks = true
+obj:closeSyntheticEventWindow()
+R.check("une fois prouvée, elle l'est",
+    obj.syntheticEventIgnoreUntil, 6000.2 + obj.syntheticEventSettleDelay)
+
+R.section("Si la marque ne survit pas sur cette machine, on retombe sur la montre")
+ctl.markLost = true
+obj.syntheticMarkWorks = false
+obj.currentState = obj.STATE.KEEPALIVE
+ctl.postedEvents = {}
+obj:postActivityKey()
+local perdu = ctl.postedEvents[#ctl.postedEvents]
+R.check("la marque est illisible", perdu:getProperty("eventSourceUserData"), nil)
+R.check("le mécanisme n'est pas déclaré fonctionnel", obj.syntheticMarkWorks, false)
+R.check("donc la fenêtre reste entière et protège",
+    obj:isSyntheticEventWindow(), true)
+ctl.markLost = false
 
 R.finish()

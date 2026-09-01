@@ -146,7 +146,7 @@ obj.__index = obj
 
 obj.name = "ActivityKeeper"
 
-obj.version = "4.17.0"
+obj.version = "4.18.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -253,6 +253,26 @@ obj.mouseReturnDelay = 0.15
 ------------------------------------------------------------
 -- FILTRAGE ÉVÉNEMENTS SYNTHÉTIQUES
 ------------------------------------------------------------
+
+-- Reconnaitre nos propres evenements a coup sur, plutot qu'a la montre.
+--
+-- La fenetre de grace ci-dessous est une approximation : elle suppose
+-- que nos evenements arrivent au tap avant son echeance. Quand elle
+-- durait une seconde, elle tenait mais aveuglait l'utilisateur pendant
+-- tout ce temps. Raccourcie a la fin de la sequence, elle laissait
+-- passer nos propres evenements en retard : ActivityKeeper reagissait a
+-- lui-meme et sortait du vert sans que personne n'ait touche la
+-- machine.
+--
+-- eventSourceUserData porte 64 bits que nous choisissons. Un evenement
+-- qui porte cette marque est le notre, quel que soit son retard. Plus
+-- aucune supposition de temps.
+obj.syntheticMark = 0x414B0001
+
+-- Passe a vrai des que le tap a vu la marque revenir : la preuve que le
+-- mecanisme fonctionne sur cette machine. Tant qu'elle est fausse, la
+-- fenetre de grace reste entiere, par prudence.
+obj.syntheticMarkWorks = false
 
 obj.syntheticEventGracePeriod = 1.0
 
@@ -1663,7 +1683,94 @@ end
 -- Referme la fenetre au plus tot : on ne garde que le temps de vol.
 -- Ne l'allonge jamais.
 
+-- Appose la marque et renvoie l'evenement, pour chainer avec :post().
+
+function obj:markSynthetic(event)
+
+    if not event then
+
+        return event
+
+    end
+
+
+    pcall(function()
+
+        event:setProperty(
+            hs.eventtap.event.properties.eventSourceUserData,
+            self.syntheticMark
+        )
+
+    end)
+
+
+    return event
+
+end
+
+
+-- Vrai si cet evenement porte notre marque. Le constater vaut preuve
+-- que le mecanisme fonctionne : on le retient.
+
+function obj:isOurEvent(event)
+
+    if not event then
+
+        return false
+
+    end
+
+
+    local ok,
+          valeur =
+        pcall(function()
+
+            return event:getProperty(
+                hs.eventtap.event.properties.eventSourceUserData
+            )
+
+        end)
+
+
+    if not ok or valeur ~= self.syntheticMark then
+
+        return false
+
+    end
+
+
+    if not self.syntheticMarkWorks then
+
+        self.syntheticMarkWorks =
+            true
+
+
+        self:log(
+            "Marquage des evenements synthetiques confirme :"
+            .. " ils sont reconnus a coup sur, sans fenetre de temps"
+        )
+
+    end
+
+
+    return true
+
+end
+
+
 function obj:closeSyntheticEventWindow()
+
+    -- Sans la preuve que la marque fonctionne, la fenetre reste
+    -- entiere : la raccourcir laisserait passer nos propres evenements
+    -- en retard, et ActivityKeeper sortirait du vert en se prenant
+    -- lui-meme pour l'utilisateur.
+
+    if not self.syntheticMarkWorks then
+
+        return self
+
+    end
+
 
     local cible =
         self:now()
@@ -2045,7 +2152,7 @@ function obj:createInputWatcher()
 
             eventTypes,
 
-            function()
+            function(event)
 
                 if self.currentState == self.STATE.OFF then
 
@@ -2057,6 +2164,17 @@ function obj:createInputWatcher()
                 if self.currentState == self.STATE.KEEPALIVE
                     and self.fastReturnWatcherEnabled then
 
+
+                    return false
+
+                end
+
+
+                -- Notre propre evenement, reconnu a sa marque. Aucune
+                -- supposition de temps : meme arrive en retard, il ne
+                -- sera jamais pris pour l'utilisateur.
+
+                if self:isOurEvent(event) then
 
                     return false
 
@@ -2130,11 +2248,23 @@ function obj:createFastReturnWatcher()
 
             eventTypes,
 
-            function()
+            function(event)
 
                 if self.currentState
                     ~= self.STATE.KEEPALIVE then
 
+
+                    return false
+
+                end
+
+
+                -- Notre propre evenement, reconnu a sa marque. C'est ce
+                -- qui manquait : la fenetre de temps laissait passer
+                -- ceux qui arrivaient en retard, et ActivityKeeper
+                -- sortait du vert en se prenant pour l'utilisateur.
+
+                if self:isOurEvent(event) then
 
                     return false
 
@@ -2365,13 +2495,17 @@ function obj:releaseActivityKey()
 
             function()
 
-                hs.eventtap.event.newKeyEvent(
+                self:markSynthetic(
 
-                    {},
+                    hs.eventtap.event.newKeyEvent(
 
-                    self.activityKey,
+                        {},
 
-                    false
+                        self.activityKey,
+
+                        false
+
+                    )
 
                 ):post()
 
@@ -2421,13 +2555,17 @@ function obj:postActivityKey()
                 -- DOWN
                 ------------------------------------------------
 
-                hs.eventtap.event.newKeyEvent(
+                self:markSynthetic(
 
-                    {},
+                    hs.eventtap.event.newKeyEvent(
 
-                    self.activityKey,
+                        {},
 
-                    true
+                        self.activityKey,
+
+                        true
+
+                    )
 
                 ):post()
 
@@ -2566,11 +2704,15 @@ function obj:sendMouseActivity()
                 -- Aller
                 ------------------------------------------------
 
-                hs.eventtap.event.newMouseEvent(
+                self:markSynthetic(
 
-                    hs.eventtap.event.types.mouseMoved,
+                    hs.eventtap.event.newMouseEvent(
 
-                    temporaryPosition
+                        hs.eventtap.event.types.mouseMoved,
+
+                        temporaryPosition
+
+                    )
 
                 ):post()
 
@@ -2676,11 +2818,15 @@ function obj:sendMouseActivity()
                             end
 
 
-                            hs.eventtap.event.newMouseEvent(
+                            self:markSynthetic(
 
-                                hs.eventtap.event.types.mouseMoved,
+                                hs.eventtap.event.newMouseEvent(
 
-                                originalPosition
+                                    hs.eventtap.event.types.mouseMoved,
+
+                                    originalPosition
+
+                                )
 
                             ):post()
 
@@ -3351,20 +3497,28 @@ function obj:sendSystemKey(keyName)
 
             function()
 
-                hs.eventtap.event.newSystemKeyEvent(
+                self:markSynthetic(
 
-                    keyName,
+                    hs.eventtap.event.newSystemKeyEvent(
 
-                    true
+                        keyName,
+
+                        true
+
+                    )
 
                 ):post()
 
 
-                hs.eventtap.event.newSystemKeyEvent(
+                self:markSynthetic(
 
-                    keyName,
+                    hs.eventtap.event.newSystemKeyEvent(
 
-                    false
+                        keyName,
+
+                        false
+
+                    )
 
                 ):post()
 

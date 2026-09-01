@@ -23,6 +23,7 @@ function M.install(opts)
         snapshotIDs = {}, snapshotFails = {}, tasks = {},
         files = {}, dirs = {}, removed = {}, launchedApps = {}, osExec = {},
         links = {}, uid = 501, windowSpaces = {}, spacesBroken = false,
+        postedEvents = {}, markLost = false,
         activeSpaces = { ["ECRAN-1"] = 1 }, activeSpaceOnScreen = 1,
         activeSpacesBroken = false,
         managedDisplays = { { ["Display Identifier"] = "ECRAN-1",
@@ -72,12 +73,44 @@ function M.install(opts)
                         return { _raw = ctl.modifierRaw } end,
                      event = {
                         types = setmetatable({}, {__index=function(_,k) return k end}),
+                        properties = setmetatable({}, {__index=function(_,k) return k end}),
+                        -- Les evenements portent des proprietes, comme les
+                        -- vrais : c'est ainsi qu'ActivityKeeper reconnait
+                        -- les siens. ctl.markLost simule une machine ou la
+                        -- propriete ne survit pas a la livraison.
                         newKeyEvent = function(mods, key, isDown)
-                            return { post = function()
-                                table.insert(ctl.keyEvents, { key = key, down = isDown })
-                            end }
+                            local e = { props = {} }
+                            e.setProperty = function(_, k, v) e.props[k] = v; return e end
+                            e.getProperty = function(_, k)
+                                if ctl.markLost then return nil end
+                                return e.props[k] end
+                            e.post = function()
+                                table.insert(ctl.keyEvents,
+                                    { key = key, down = isDown, event = e })
+                                table.insert(ctl.postedEvents, e)
+                            end
+                            return e
                         end,
-                        newMouseEvent = function() return { post = function() end } end,
+                        newSystemKeyEvent = function(name, isDown)
+                            local e = { props = {} }
+                            e.setProperty = function(_, k, v) e.props[k] = v; return e end
+                            e.getProperty = function(_, k)
+                                if ctl.markLost then return nil end
+                                return e.props[k] end
+                            e.post = function()
+                                table.insert(ctl.postedEvents, e) end
+                            return e
+                        end,
+                        newMouseEvent = function()
+                            local e = { props = {} }
+                            e.setProperty = function(_, k, v) e.props[k] = v; return e end
+                            e.getProperty = function(_, k)
+                                if ctl.markLost then return nil end
+                                return e.props[k] end
+                            e.post = function()
+                                table.insert(ctl.postedEvents, e) end
+                            return e
+                        end,
                      } },
         screen = { mainScreen=function() return screenObj(ctl.screens[1]) end,
                    allScreens=function()
