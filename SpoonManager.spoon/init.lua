@@ -21,7 +21,7 @@ obj.__index = obj
 
 obj.name = "SpoonManager"
 
-obj.version = "2.2.0"
+obj.version = "2.3.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -1154,7 +1154,21 @@ end
 -- seul endroit ou cette borne a sa place : le pivot.
 ------------------------------------------------------------
 
-obj.axTimeout = 0.25
+-- 250 ms ne suffisaient pas. Journal de l'utilisateur :
+--
+--   Balayage complet interrompu apres 552 ms (budget 150 ms).
+--   Reprise au tick suivant a partir de l'application 65.
+--
+-- Le budget est verifie AVANT chaque application, donc le depassement
+-- vaut le cout d'une seule -- ici 400 ms. Une application interrogee,
+-- c'est plusieurs requetes d'accessibilite : la liste de ses fenetres,
+-- puis un identifiant par fenetre. Le plafond par requete doit donc
+-- etre nettement plus bas que le budget d'un balayage.
+--
+-- Le cas normal coute 0,3 ms par application. A 100 ms par requete, la
+-- marge reste de deux ordres de grandeur, et une application muette ne
+-- peut plus a elle seule tripler la duree d'un balayage.
+obj.axTimeout = 0.10
 
 
 function obj:applyAXTimeout()

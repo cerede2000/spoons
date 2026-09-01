@@ -184,14 +184,14 @@ R.section("Les requêtes d'accessibilité sont bornées")
 -- pathologique n'avait aucune borne.
 ctl.axTimeoutSet = nil
 ctl.axTimeoutFails = false
-obj.axTimeout = 0.25
+obj.axTimeout = 0.10
 obj:applyAXTimeout()
-R.check("la borne est appliquée", ctl.axTimeoutSet, 0.25)
+R.check("la borne est appliquée", ctl.axTimeoutSet, 0.10)
 
 ctl.printed = {}
 obj:applyAXTimeout()
 R.check("et elle est annoncée",
-    table.concat(ctl.printed, " "):find("bornees a 250 ms", 1, true) ~= nil, true)
+    table.concat(ctl.printed, " "):find("bornees a 100 ms", 1, true) ~= nil, true)
 
 R.section("Un refus du système est dit, pas avalé")
 ctl.axTimeoutSet = nil
@@ -215,7 +215,7 @@ R.check("nil : on ne touche à rien", ctl.axTimeoutSet, nil)
 obj.axTimeout = -1
 obj:applyAXTimeout()
 R.check("négatif : on ne touche à rien non plus", ctl.axTimeoutSet, nil)
-obj.axTimeout = 0.25
+obj.axTimeout = 0.10
 
 R.section("La borne est posée avant le démarrage des Spoons")
 -- Les Spoons interrogent l'accessibilité dès leur démarrage : poser la

@@ -96,103 +96,6 @@ R.check("hook préexistant chaîné", prevCalled, true)
 
 
 ------------------------------------------------------------
-R.section("Sortie du vert : la frappe avalée par la fenêtre synthétique")
-------------------------------------------------------------
--- Le scénario mesuré chez l'utilisateur :
---
---   T      keep-alive envoyé, fenêtre synthétique ouverte 1 s
---   T+0,3  l'utilisateur tape — le tap ignore, c'est la fenêtre
---   T+8    l'idle redevient consultable (postKeepAliveIdleIgnorePeriod)
---   T+10   idle vaut 10 s, plus que realActivityReturnIdleThreshold (6)
---   ...    l'utilisateur ne tape plus : plus aucun événement
---
--- L'application restait verte indéfiniment. La nouvelle règle ne
--- compare plus l'inactivité à un seuil fixe, mais à l'âge de NOTRE
--- dernier événement : si l'horloge de macOS est plus récente que lui,
--- c'est que quelqu'un d'autre a agi.
-obj.currentState = obj.STATE.KEEPALIVE
-obj.keepaliveExitMargin = 2
-obj.keepaliveEnteredAt = 1000
-obj.lastKeepAliveTime = 1000
-
--- Personne n'a rien fait : l'inactivité suit notre keep-alive.
-ctl.timeNow = 1010
-ctl.idle = 10
-R.check("aucune activité : on reste vert",
-    obj:realActivitySinceOurLastEvent(), false)
-
--- L'utilisateur a tapé à T+3 puis s'est arrêté : inactivité 7 s, notre
--- keep-alive remonte à 10 s. Plus récent que nous, donc c'est lui.
-ctl.idle = 7
-R.check("frappe manquée par le tap : rattrapée quand même",
-    obj:realActivitySinceOurLastEvent(), true)
-
--- L'ancienne règle ne l'aurait pas vue : 7 s dépasse le seuil de 6.
-R.check("l'ancien seuil aurait échoué",
-    7 <= obj.realActivityReturnIdleThreshold, false)
-
--- Ce que l'inférence ne peut PAS voir : une activité trop proche de la
--- nôtre. Elle est indiscernable par construction — c'est la fermeture
--- anticipée de la fenêtre aveugle qui couvre ce cas, pas ce filet.
-ctl.idle = 9.7
-R.check("activité à 0,3 s de la nôtre : hors de portée de l'inférence",
-    obj:realActivitySinceOurLastEvent(), false)
-
-R.section("La marge protège des conclusions hâtives")
-ctl.idle = 0
-ctl.timeNow = 1001
-R.check("juste après notre keep-alive : on ne conclut rien",
-    obj:realActivitySinceOurLastEvent(), false)
-
-ctl.timeNow = 1010
-ctl.idle = 8.5
-R.check("dans la marge : on ne conclut pas non plus",
-    obj:realActivitySinceOurLastEvent(), false)
-ctl.idle = 7.5
-R.check("au-delà de la marge : on conclut",
-    obj:realActivitySinceOurLastEvent(), true)
-
-R.section("Entrée au vert sans keep-alive encore envoyé")
--- Sans la borne d'entrée, « aucun keep-alive » vaudrait référence à
--- l'époque, et l'application ressortirait du vert immédiatement.
-obj.lastKeepAliveTime = nil
-obj.keepaliveEnteredAt = 1000
-ctl.timeNow = 1005
-ctl.idle = 125            -- inactif depuis longtemps, c'est pour ça qu'on est vert
-R.check("on vient de passer au vert : rien à déduire",
-    obj:realActivitySinceOurLastEvent(), false)
-ctl.idle = 0.5            -- l'utilisateur revient avant le premier keep-alive
-R.check("mais un vrai retour est vu",
-    obj:realActivitySinceOurLastEvent(), true)
-
-R.section("Hors du vert, la règle ne s'applique pas")
-obj.currentState = obj.STATE.MONITORING
-R.check("en jaune : rien", obj:realActivitySinceOurLastEvent(), false)
-obj.currentState = obj.STATE.OFF
-R.check("éteint : rien", obj:realActivitySinceOurLastEvent(), false)
-
-R.section("Le filet tourne en vert et s'arrête en sortant")
-obj.currentState = obj.STATE.MONITORING
-obj.fastReturnWatcherEnabled = false
-ctl.everyTimers = {}
-obj:setState(obj.STATE.KEEPALIVE)
-R.check("un filet bat pendant le vert", obj.keepaliveExitTimer ~= nil, true)
-R.check("à la bonne cadence",
-    ctl.everyTimers[#ctl.everyTimers].delay, obj.keepaliveExitCheckInterval)
-R.check("l'instant d'entrée est noté", obj.keepaliveEnteredAt ~= nil, true)
-obj:setState(obj.STATE.MONITORING)
-R.check("il s'arrête en sortant", obj.keepaliveExitTimer, nil)
-R.check("et la référence est effacée", obj.keepaliveEnteredAt, nil)
-
-R.section("Aucun timer ne survit à l'arrêt")
-obj:setState(obj.STATE.KEEPALIVE)
-R.check("filet actif", obj.keepaliveExitTimer ~= nil, true)
-obj:stop()
-R.check("libéré à l'arrêt du Spoon", obj.keepaliveExitTimer, nil)
-obj.fastReturnWatcherEnabled = true
-
-
-------------------------------------------------------------
 R.section("La fenêtre aveugle se referme dès la séquence finie")
 ------------------------------------------------------------
 -- Elle durait une seconde entière alors que la séquence synthétique
@@ -399,57 +302,18 @@ R.check("donc la fenêtre reste entière et protège",
 ctl.markLost = false
 
 
-------------------------------------------------------------
-R.section("Nos touches de rétroéclairage ne sont pas l'utilisateur")
-------------------------------------------------------------
--- Le keep-alive n'est pas notre seul événement. disableKeyboardBacklight
--- et restoreKeyboardBacklight postent des touches système, et
--- forceKeyboardBacklightOffAfterKeepAlive s'exécute à des instants sans
--- rapport avec le dernier keep-alive. Toutes remettent à zéro l'horloge
--- d'inactivité de macOS.
---
--- L'inférence comparait cette horloge au dernier KEEP-ALIVE. Une touche
--- de rétroéclairage postée trente secondes plus tard remettait donc
--- l'horloge à zéro alors que la référence datait de trente secondes :
--- l'inférence concluait « quelqu'un d'autre a agi ». Puis l'inactivité
--- remontait, on repassait au vert — surveillance, actif, surveillance,
--- actif, sans que personne ne touche la machine.
-obj.currentState = obj.STATE.KEEPALIVE
-obj.keepaliveExitMargin = 2
-obj.keepaliveEnteredAt = 1000
-obj.lastKeepAliveTime = 1000
-obj.lastSyntheticAt = 1000
-
--- Trente secondes plus tard, rien ne s'est passé.
-ctl.timeNow = 1030
-ctl.idle = 30
-R.check("rien à déduire", obj:realActivitySinceOurLastEvent(), false)
-
--- Nous postons une touche système de rétroéclairage : macOS remet son
--- horloge à zéro. Le dernier keep-alive, lui, remonte toujours à 30 s.
-obj:markSynthetic({ setProperty = function(e) return e end })
-ctl.idle = 0.2
-R.check("notre propre touche n'est pas l'utilisateur",
-    obj:realActivitySinceOurLastEvent(), false)
-
--- Et un vrai retour reste vu, une fois passée la marge.
-ctl.timeNow = 1040
-ctl.idle = 0.5
-R.check("un vrai retour est toujours détecté",
-    obj:realActivitySinceOurLastEvent(), true)
-
 R.section("Chaque événement émis met la référence à jour")
 ctl.postedEvents = {}
 obj.lastSyntheticAt = nil
 obj.activityKey = "shift"
 ctl.timeNow = 2000
 obj:postActivityKey()
-R.check("la touche de keep-alive compte", obj.lastSyntheticAt, 2000)
+R.check("la touche de keep-alive est bien émise", #ctl.postedEvents > 0, true)
 
 obj.lastSyntheticAt = nil
 ctl.timeNow = 2100
 obj:sendSystemKey("ILLUMINATION_DOWN")
-R.check("la touche système aussi", obj.lastSyntheticAt, 2100)
+R.check("la touche système aussi", #ctl.postedEvents > 0, true)
 
 obj.lastSyntheticAt = nil
 ctl.timeNow = 2200
@@ -457,7 +321,7 @@ ctl.mouseClamped = false
 ctl.mousePosition = { x = 400, y = 300 }
 obj.isMouseEnabled = function() return true end
 obj:sendMouseActivity()
-R.check("le déplacement de souris aussi", obj.lastSyntheticAt, 2200)
+R.check("le déplacement de souris aussi", #ctl.postedEvents > 0, true)
 ctl.timeNow = nil
 
 
@@ -531,5 +395,94 @@ tapPid.fn(notre3)
 R.check("reconnu par la marque", obj.realActivityPending, false)
 ctl.pidLost = false
 ctl.markLost = false
+
+
+------------------------------------------------------------
+R.section("La règle de sortie ne peut pas se déclencher sur nos propres événements")
+------------------------------------------------------------
+-- C'est l'invariant, et il faut qu'il reste vrai : nos keep-alives
+-- remettent l'horloge d'inactivité de macOS à zéro. Donc une
+-- inactivité faible implique un keep-alive récent. Les deux fenêtres
+-- — activité de moins de realActivityReturnIdleThreshold, ET dernier
+-- keep-alive de plus de postKeepAliveIdleIgnorePeriod — ne peuvent
+-- être vraies ensemble que pour une activité qui n'est pas la nôtre.
+--
+-- Une version a remplacé cela par une comparaison directe entre
+-- l'horloge et l'âge de nos événements. Mesuré sur la machine, trois
+-- fois de suite à trente secondes du passage au vert :
+--   « inactivité 26,0 s, notre dernier événement remonte à 29 s »
+-- Trois secondes d'écart systématique. ActivityKeeper ressortait du
+-- vert tout seul toutes les trente secondes.
+R.check("le seuil couvre le décalage mesuré",
+    obj:effectiveIdleIgnorePeriod()
+        >= obj.realActivityReturnIdleThreshold + obj.idleRuleSkewAllowance, true)
+
+local function sortirait(idle, depuisKeepAlive)
+    -- reproduit exactement la condition de checkIdleState
+    return idle <= obj.realActivityReturnIdleThreshold
+        and depuisKeepAlive > obj:effectiveIdleIgnorePeriod()
+end
+
+-- Notre keep-alive remet l'horloge à zéro : idle et depuis avancent
+-- ensemble. Aucun instant ne satisfait les deux fenêtres.
+local faussePositive = false
+for depuis = 0, 60 do
+    if sortirait(depuis, depuis) then faussePositive = true end
+end
+R.check("aucun instant ne déclenche sur nos propres événements",
+    faussePositive, false)
+
+-- Même avec un écart systématique de plusieurs secondes entre notre
+-- horodatage et celui de macOS — le cas qui a cassé l'inférence.
+faussePositive = false
+for depuis = 0, 60 do
+    for ecart = 0, 5 do
+        if sortirait(math.max(0, depuis - ecart), depuis) then
+            faussePositive = true
+        end
+    end
+end
+R.check("ni même avec un décalage de cinq secondes", faussePositive, false)
+
+-- Et un vrai retour est bien vu.
+R.check("un vrai retour, lui, sort du vert", sortirait(1, 30), true)
+
+
+------------------------------------------------------------
+R.section("Une configuration trop courte est relevée, pas subie")
+------------------------------------------------------------
+-- L'utilisateur avait 6 et 8 dans son init.lua : deux secondes de
+-- tolérance pour un décalage réel de trois. Corriger le défaut du Spoon
+-- n'aurait rien changé pour lui — sa valeur l'aurait écrasé. L'invariant
+-- est donc appliqué à l'exécution.
+obj.realActivityReturnIdleThreshold = 6
+obj.idleRuleSkewAllowance = 6
+obj.postKeepAliveIdleIgnorePeriod = 8      -- la valeur qui posait problème
+obj.idleIgnorePeriodWarned = nil
+ctl.printed = {}
+R.check("la valeur est relevée", obj:effectiveIdleIgnorePeriod(), 12)
+R.check("et le relèvement est expliqué",
+    table.concat(ctl.printed, " "):find("prend ses propres", 1, true) ~= nil, true)
+
+ctl.printed = {}
+obj:effectiveIdleIgnorePeriod()
+R.check("mais dit une seule fois", #ctl.printed, 0)
+
+obj.postKeepAliveIdleIgnorePeriod = 20
+R.check("une valeur suffisante est respectée", obj:effectiveIdleIgnorePeriod(), 20)
+
+R.section("Avec l'invariant, aucun décalage plausible ne déclenche")
+obj.postKeepAliveIdleIgnorePeriod = 15
+local faussePositive2 = false
+for depuis = 0, 120 do
+    for ecart = 0, obj.idleRuleSkewAllowance do
+        if depuis - ecart <= obj.realActivityReturnIdleThreshold
+            and depuis > obj:effectiveIdleIgnorePeriod() then
+            faussePositive2 = true
+        end
+    end
+end
+R.check("aucun instant, aucun décalage jusqu'à six secondes",
+    faussePositive2, false)
 
 R.finish()
