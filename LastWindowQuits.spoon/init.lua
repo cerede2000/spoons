@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.17.0"
+obj.version = "1.18.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -161,7 +161,18 @@ obj.maxSimultaneousScanQuits = 2
 --
 -- Un balayage partiel, lui, n'interroge que les applications ayant deja
 -- des fenetres connues : les interrompre ne perd aucune reference.
+--
+-- Un balayage complet ne peut donc pas etre abandonne -- mais il peut
+-- etre ETALE. Mesure sur la machine de l'utilisateur : 570 ms toutes
+-- les trente secondes, pendant lesquelles aucune frappe n'etait
+-- transmise. Le balayage complet reprend desormais la ou il s'est
+-- arrete au tick suivant, jusqu'a couvrir tout le monde. Meme
+-- reference etablie, en morceaux de scanTimeBudget.
 obj.scanTimeBudget = 0.15
+
+-- Position de reprise d'un balayage complet en cours. Non nil = il
+-- reste des applications a voir, et le prochain tick doit continuer.
+obj.fullScanCursor = nil
 
 -- Suspend la surveillance pendant la veille, le verrouillage et
 -- l'economiseur d'ecran. L'API d'accessibilite y devient muette et
@@ -2400,31 +2411,55 @@ function obj:scanWindowTransitions(initial)
     local fullScan =
         initial == true
         or self.lastFullScanAt == nil
+        or self.fullScanCursor ~= nil
         or (now - self.lastFullScanAt)
             >= self:windowTransitionFullScanPeriod()
 
 
-    if fullScan then
+    local applications =
+        hs.application.runningApplications()
 
-        self.lastFullScanAt =
-            now
+
+    -- Un balayage complet interrompu reprend ou il s'est arrete. Un
+    -- balayage partiel repart du debut : il ne visite qu'une poignee
+    -- d'applications, celles qui ont des fenetres connues.
+
+    local depart =
+        (fullScan and self.fullScanCursor) or 1
+
+
+    if depart > #applications then
+
+        depart =
+            1
 
     end
 
 
-    for _, application in ipairs(hs.application.runningApplications()) do
+    for index = depart, #applications do
+
+        local application =
+            applications[index]
+
 
         -- Budget epuise : on ne touche plus a l'accessibilite. Les
         -- applications restantes gardent leur comptage precedent, donc
         -- aucune ne peut etre vue comme ayant perdu ses fenetres.
 
         if not interrompu
-            and not fullScan
             and budget > 0
             and (self:now() - debutBalayage) > budget then
 
             interrompu =
                 true
+
+
+            if fullScan then
+
+                self.fullScanCursor =
+                    index
+
+            end
 
         end
 
@@ -2531,10 +2566,33 @@ function obj:scanWindowTransitions(initial)
     end
 
 
-    -- Ce qui n'a pas ete visite garde sa valeur : un balayage
-    -- interrompu ne doit rien effacer.
+    if fullScan and not interrompu then
 
-    if interrompu then
+        -- Tout le monde a ete vu : la reference est complete.
+
+        self.fullScanCursor =
+            nil
+
+
+        self.lastFullScanAt =
+            now
+
+    end
+
+
+    -- Ce qui n'a pas ete visite garde sa valeur.
+    --
+    -- Vrai dans les deux sens d'un balayage etale : ce qui reste a voir
+    -- apres une interruption, et ce qui a ete vu AVANT la reprise. Sans
+    -- le second, un balayage complet repris a mi-chemin ecrasait la
+    -- reference etablie par sa premiere moitie.
+
+    local etale =
+        interrompu
+        or depart > 1
+
+
+    if etale then
 
         for cle, valeur in pairs(previousCounts) do
 
@@ -2548,13 +2606,22 @@ function obj:scanWindowTransitions(initial)
         end
 
 
+    end
+
+
+    if interrompu then
+
         self:log(
             string.format(
-                "Balayage interrompu apres %d ms (budget %d ms) :"
-                .. " l'accessibilite repond lentement. Le reste est"
-                .. " reporte au tick suivant.",
+                "Balayage %s interrompu apres %d ms (budget %d ms)."
+                .. " Reprise au tick suivant%s.",
+                fullScan and "complet" or "partiel",
                 math.floor((self:now() - debutBalayage) * 1000),
-                math.floor(budget * 1000)
+                math.floor(budget * 1000),
+                self.fullScanCursor
+                    and (" a partir de l'application "
+                        .. tostring(self.fullScanCursor))
+                    or ""
             ),
             true
         )

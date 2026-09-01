@@ -146,7 +146,7 @@ obj.__index = obj
 
 obj.name = "ActivityKeeper"
 
-obj.version = "4.19.0"
+obj.version = "4.20.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -1705,6 +1705,32 @@ end
 
 -- Appose la marque et renvoie l'evenement, pour chainer avec :post().
 
+-- Pid de Hammerspoon, releve une fois.
+
+function obj:ownProcessID()
+
+    if self.processID == nil then
+
+        local ok,
+              pid =
+            pcall(function()
+
+                return hs.processInfo.processID
+
+            end)
+
+
+        self.processID =
+            (ok and pid) or false
+
+    end
+
+
+    return self.processID or nil
+
+end
+
+
 function obj:markSynthetic(event)
 
     if not event then
@@ -1745,18 +1771,56 @@ function obj:isOurEvent(event)
     end
 
 
+    -- Deux preuves, la plus fiable d'abord.
+    --
+    -- eventSourceUnixProcessID est le pid du processus qui a POSTE
+    -- l'evenement, renseigne par le systeme au moment de la livraison.
+    -- Nos evenements portent celui de Hammerspoon ; une vraie frappe
+    -- vient du serveur de fenetres et n'en porte jamais.
+    --
+    -- eventSourceUserData est notre marque, apposee a la main. Elle
+    -- n'a pas ete observee comme survivant a la livraison sur cette
+    -- machine : elle reste en second recours.
+
     local ok,
-          valeur =
+          pid =
         pcall(function()
 
             return event:getProperty(
-                hs.eventtap.event.properties.eventSourceUserData
+                hs.eventtap.event.properties.eventSourceUnixProcessID
             )
 
         end)
 
 
-    if not ok or valeur ~= self.syntheticMark then
+    local notre =
+        ok
+        and pid ~= nil
+        and pid ~= 0
+        and pid == self:ownProcessID()
+
+
+    if not notre then
+
+        local okMarque,
+              valeur =
+            pcall(function()
+
+                return event:getProperty(
+                    hs.eventtap.event.properties.eventSourceUserData
+                )
+
+            end)
+
+
+        notre =
+            okMarque
+            and valeur == self.syntheticMark
+
+    end
+
+
+    if not notre then
 
         return false
 
@@ -1770,8 +1834,8 @@ function obj:isOurEvent(event)
 
 
         self:log(
-            "Marquage des evenements synthetiques confirme :"
-            .. " ils sont reconnus a coup sur, sans fenetre de temps"
+            "Reconnaissance de nos propres evenements confirmee :"
+            .. " ils sont identifies a coup sur, sans fenetre de temps"
         )
 
     end

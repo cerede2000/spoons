@@ -167,20 +167,23 @@ obj.honourTransientWindowApps = true
 
 
 ------------------------------------------------------------
-R.section("Le balayage complet n'est JAMAIS interrompu")
+R.section("Le balayage complet est étalé, jamais abandonné")
 ------------------------------------------------------------
--- C'est lui qui établit la référence : combien de fenêtres chaque
--- application possède. L'interrompre laisse cette référence incomplète,
--- et une application absente de la référence n'est plus interrogée par
--- les balayages partiels — qui ne s'occupent que de celles dont on sait
--- qu'elles ont des fenêtres. Elle devient invisible.
+-- Il établit la référence : combien de fenêtres chaque application
+-- possède. L'abandonner laisse cette référence incomplète, et une
+-- application qui n'y figure pas n'est plus interrogée par les
+-- balayages partiels — elle devient invisible.
 --
--- Au démarrage les caches d'accessibilité sont froids : 2626 ms
--- mesurées pour 57 applications, contre 36 ms une fois chauds. Le
--- budget sautait dès les premières applications et LastWindowQuits
--- démarrait sans savoir quelles fenêtres existaient.
+-- Mais il ne peut pas non plus monopoliser le thread principal :
+-- mesuré chez l'utilisateur, 570 ms toutes les trente secondes,
+-- pendant lesquelles aucune frappe n'était transmise.
+--
+-- Il reprend donc là où il s'est arrêté, jusqu'à couvrir tout le
+-- monde. Même référence établie, en morceaux.
 fresh({"Edge","Firefox","Claude","Notes"})
 obj.scanTimeBudget = 0.15
+obj.fullScanCursor = nil
+obj.windowCounts = {}
 
 local vraiCount = obj.countWindows
 local function lent()
@@ -192,24 +195,35 @@ end
 
 lent()
 ctl.printed = {}
-obj.windowCounts = {}
 obj:scanWindowTransitions(true)          -- balayage de démarrage
-obj.countWindows = vraiCount
-
-R.check("aucune interruption",
-    table.concat(ctl.printed, " "):find("Balayage interrompu", 1, true) ~= nil, false)
+R.check("il s'interrompt sur le budget",
+    table.concat(ctl.printed, " "):find("complet interrompu", 1, true) ~= nil, true)
+R.check("et retient où reprendre", obj.fullScanCursor ~= nil, true)
 
 local connus = 0
+for _ in pairs(obj.windowCounts) do connus = connus + 1 end
+R.check("une partie seulement est vue pour l'instant", connus < 4, true)
+
+-- Les ticks suivants reprennent et complètent.
+local tours = 0
+while obj.fullScanCursor and tours < 10 do
+    obj:scanWindowTransitions(false)
+    tours = tours + 1
+end
+obj.countWindows = vraiCount
+
+R.check("le balayage finit par se terminer", obj.fullScanCursor, nil)
+connus = 0
 for _ in pairs(obj.windowCounts) do connus = connus + 1 end
 R.check("la référence couvre les quatre applications", connus, 4)
 R.check("et chacune avec sa fenêtre", obj.windowCounts["com.t.Notes"], 1)
 
 R.section("Une fermeture est donc bien vue après le démarrage")
--- C'est le test de bout en bout : si la référence est complète, la
--- perte de la dernière fenêtre est détectée normalement.
+-- Test de bout en bout : référence complète, puis perte de la dernière
+-- fenêtre, puis fermeture.
 ctl.runningApps[4]._windows = {}          -- Notes perd sa fenêtre
 obj.seenApps["com.t.Notes"] = true
-obj.lastFullScanAt = ctl.now              -- la suite est en balayage partiel
+obj.lastFullScanAt = ctl.now
 for _ = 1, obj.quitConfirmations do
     obj:scanWindowTransitions(false)
     plusTard()
@@ -218,14 +232,20 @@ ctl.fireTimers()
 R.check("Notes est fermée", #ctl.killed, 1)
 R.check("la bonne", ctl.killed[1], "Notes")
 
-------------------------------------------------------------
-R.section("Un balayage partiel lent, lui, rend la main")
-------------------------------------------------------------
--- Il n'interroge que les applications ayant déjà des fenêtres connues :
--- l'interrompre ne perd aucune référence, et borne le temps passé sur
--- le thread principal — celui-là même qui livre les frappes.
+R.section("Un balayage rapide n'est jamais interrompu")
+fresh({"Edge","Firefox"})
+obj.scanTimeBudget = 0.15
+obj.fullScanCursor = nil
+ctl.printed = {}
+obj:scanWindowTransitions(true)
+R.check("aucune interruption",
+    table.concat(ctl.printed, " "):find("interrompu", 1, true) ~= nil, false)
+R.check("aucune reprise en attente", obj.fullScanCursor, nil)
+
+R.section("Un balayage partiel lent rend la main sans rien perdre")
 fresh({"Edge","Firefox","Claude","Notes"})
 obj.scanTimeBudget = 0.15
+obj.fullScanCursor = nil
 obj.windowCounts = { ["com.t.Edge"] = 1, ["com.t.Firefox"] = 1,
                      ["com.t.Claude"] = 1, ["com.t.Notes"] = 1 }
 obj.lastFullScanAt = ctl.now             -- force un balayage partiel
@@ -233,41 +253,30 @@ lent()
 ctl.printed = {}
 obj:scanWindowTransitions(false)
 obj.countWindows = vraiCount
-
 R.check("l'interruption est journalisée",
-    table.concat(ctl.printed, " "):find("Balayage interrompu", 1, true) ~= nil, true)
+    table.concat(ctl.printed, " "):find("partiel interrompu", 1, true) ~= nil, true)
+R.check("un partiel ne laisse pas de reprise", obj.fullScanCursor, nil)
 R.check("aucune fermeture programmée", armed(), 0)
-
 connus = 0
 for _ in pairs(obj.windowCounts) do connus = connus + 1 end
 R.check("les quatre comptages sont conservés", connus, 4)
 R.check("y compris ceux qu'on n'a pas eu le temps de voir",
     obj.windowCounts["com.t.Notes"], 1)
 
-R.section("Un balayage partiel rapide n'est pas interrompu")
-fresh({"Edge","Firefox"})
-obj.scanTimeBudget = 0.15
-obj.windowCounts = { ["com.t.Edge"] = 1, ["com.t.Firefox"] = 1 }
-obj.lastFullScanAt = ctl.now
-ctl.printed = {}
-obj:scanWindowTransitions(false)
-R.check("aucune interruption",
-    table.concat(ctl.printed, " "):find("Balayage interrompu", 1, true) ~= nil, false)
-
 R.section("Budget désactivable")
 fresh({"Edge","Firefox","Claude","Notes"})
 obj.scanTimeBudget = 0
-obj.windowCounts = { ["com.t.Edge"] = 1, ["com.t.Firefox"] = 1,
-                     ["com.t.Claude"] = 1, ["com.t.Notes"] = 1 }
-obj.lastFullScanAt = ctl.now
+obj.fullScanCursor = nil
 lent()
 ctl.printed = {}
-obj:scanWindowTransitions(false)
+obj:scanWindowTransitions(true)
 obj.countWindows = vraiCount
 R.check("sans budget, le balayage va jusqu'au bout",
-    table.concat(ctl.printed, " "):find("Balayage interrompu", 1, true) ~= nil, false)
+    table.concat(ctl.printed, " "):find("interrompu", 1, true) ~= nil, false)
+connus = 0
+for _ in pairs(obj.windowCounts) do connus = connus + 1 end
+R.check("et couvre tout le monde", connus, 4)
 obj.scanTimeBudget = 0.15
-
 
 ------------------------------------------------------------
 R.section("Le démarrage ne balaie qu'une fois")

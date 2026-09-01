@@ -201,7 +201,7 @@ Le switcher, lui, se sert de cette meme API sans risque : il ne pose que
 la question de la **position** d'une fenetre dont il sait deja qu'elle
 est vivante, et une reponse vide y vaut « ici ».
 
-### Le balayage complet n'est jamais interrompu
+### Le balayage complet est etale, jamais abandonne
 
 Un balayage complet -- celui du demarrage, et celui qui revient toutes
 les trente secondes -- etablit la reference : combien de fenetres chaque
@@ -216,10 +216,21 @@ applications, contre 36 ms une fois chauds -- donc le budget sautait des
 les premieres applications, et le Spoon demarrait sans savoir quelles
 fenetres existaient. Il ne fermait plus rien.
 
-`scanTimeBudget` ne s'applique donc qu'aux balayages **partiels**. Ils
-n'interrogent que les applications ayant deja des fenetres connues :
-les interrompre ne perd aucune reference, et borne le temps passe sur
-le thread principal -- celui-la meme qui livre les frappes.
+Mais il ne peut pas non plus monopoliser le thread principal -- celui-la
+meme qui livre les frappes. Mesure sur la machine : **570 ms toutes les
+trente secondes**, pendant lesquelles aucune touche n'etait transmise.
+Assez, aussi, pour retarder la livraison des evenements synthetiques
+d'ActivityKeeper au-dela de sa fenetre de grace, et lui faire prendre
+ses propres keep-alives pour l'utilisateur.
+
+Le balayage complet **reprend donc la ou il s'est arrete** au tick
+suivant, jusqu'a couvrir tout le monde : meme reference etablie, en
+morceaux de `scanTimeBudget`. Ce qui a ete vu avant la reprise est
+conserve, ce qui reste a voir garde son comptage precedent.
+
+Un balayage partiel, lui, s'interrompt sans reprise : il n'interroge que
+les applications ayant deja des fenetres connues, et le tick suivant les
+reverra de toute facon.
 
 Le demarrage ne balaie qu'une fois. `primeSeenApps` et le balayage
 initial interrogeaient tous deux l'ensemble des applications, et

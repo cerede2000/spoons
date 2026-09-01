@@ -23,7 +23,7 @@ function M.install(opts)
         snapshotIDs = {}, snapshotFails = {}, tasks = {},
         files = {}, dirs = {}, removed = {}, launchedApps = {}, osExec = {},
         links = {}, uid = 501, windowSpaces = {}, spacesBroken = false,
-        postedEvents = {}, markLost = false,
+        postedEvents = {}, markLost = false, pidLost = false,
         activeSpaces = { ["ECRAN-1"] = 1 }, activeSpaceOnScreen = 1,
         activeSpacesBroken = false,
         managedDisplays = { { ["Display Identifier"] = "ECRAN-1",
@@ -82,6 +82,10 @@ function M.install(opts)
                             local e = { props = {} }
                             e.setProperty = function(_, k, v) e.props[k] = v; return e end
                             e.getProperty = function(_, k)
+                                if k == "eventSourceUnixProcessID" then
+                                    if ctl.pidLost then return 0 end
+                                    return 4321
+                                end
                                 if ctl.markLost then return nil end
                                 return e.props[k] end
                             e.post = function()
@@ -95,6 +99,10 @@ function M.install(opts)
                             local e = { props = {} }
                             e.setProperty = function(_, k, v) e.props[k] = v; return e end
                             e.getProperty = function(_, k)
+                                if k == "eventSourceUnixProcessID" then
+                                    if ctl.pidLost then return 0 end
+                                    return 4321
+                                end
                                 if ctl.markLost then return nil end
                                 return e.props[k] end
                             e.post = function()
@@ -105,6 +113,10 @@ function M.install(opts)
                             local e = { props = {} }
                             e.setProperty = function(_, k, v) e.props[k] = v; return e end
                             e.getProperty = function(_, k)
+                                if k == "eventSourceUnixProcessID" then
+                                    if ctl.pidLost then return 0 end
+                                    return 4321
+                                end
                                 if ctl.markLost then return nil end
                                 return e.props[k] end
                             e.post = function()
@@ -341,6 +353,7 @@ function M.install(opts)
         __newindex = function(t,k,v) if k=="shutdownCallback" then shutdownCb=v else rawset(t,k,v) end end,
         __index = function(t,k) if k=="shutdownCallback" then return shutdownCb end end,
     })
+    hs.processInfo = { processID = 4321, bundleID = "org.hammerspoon.Hammerspoon" }
     _G.hs = hs
 
     -- ctl.timeNow pilote os.time() quand il est defini ; sinon

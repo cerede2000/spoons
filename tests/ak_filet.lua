@@ -460,4 +460,76 @@ obj:sendMouseActivity()
 R.check("le déplacement de souris aussi", obj.lastSyntheticAt, 2200)
 ctl.timeNow = nil
 
+
+------------------------------------------------------------
+R.section("Nos événements sont reconnus au pid qui les a postés")
+------------------------------------------------------------
+-- Journal réel : « Activité utilisateur réelle détectée (origine : tap
+-- rapide, inactivité 0.0 s) » deux secondes après le passage au vert,
+-- sans que personne ne touche la machine — et aucune ligne confirmant
+-- la marque. eventSourceUserData ne survivait donc pas à la livraison.
+--
+-- eventSourceUnixProcessID, lui, est renseigné par le système au moment
+-- de la livraison : nos événements portent le pid de Hammerspoon, une
+-- vraie frappe vient du serveur de fenêtres et n'en porte jamais.
+ctl.timeNow = nil
+ctl.markLost = true          -- la marque manuelle ne survit pas
+ctl.pidLost = false
+obj.processID = nil
+obj.syntheticMarkWorks = false
+obj.currentState = obj.STATE.KEEPALIVE
+obj.fastReturnWatcherEnabled = true
+obj.fastReturnThrottle = 0
+obj.realActivityPending = false
+obj.fastReturnWatcher = nil
+ctl.eventtaps = {}
+ctl.postedEvents = {}
+obj:createFastReturnWatcher()
+local tapPid = ctl.eventtaps[#ctl.eventtaps]
+
+obj.activityKey = "shift"
+obj:postActivityKey()
+local notre2 = ctl.postedEvents[#ctl.postedEvents]
+R.check("la marque manuelle est bien perdue",
+    notre2:getProperty("eventSourceUserData"), nil)
+R.check("mais le pid émetteur est là",
+    notre2:getProperty("eventSourceUnixProcessID"), 4321)
+
+-- Livré bien après la fenêtre de grâce, comme lors d'un blocage du
+-- thread principal.
+ctl.now = ctl.now + 60
+obj.realActivityPending = false
+tapPid.fn(notre2)
+R.check("la fenêtre de grâce est expirée", obj:isSyntheticEventWindow(), false)
+R.check("il est quand même reconnu comme le nôtre",
+    obj.realActivityPending, false)
+R.check("l'application reste verte", obj.currentState, obj.STATE.KEEPALIVE)
+R.check("et la reconnaissance est confirmée", obj.syntheticMarkWorks, true)
+
+R.section("Une vraie frappe ne porte pas notre pid")
+local frappe = { getProperty = function(_, k)
+    if k == "eventSourceUnixProcessID" then return 0 end
+    return nil
+end }
+obj.realActivityPending = false
+obj.lastFastReturnEventAt = 0
+tapPid.fn(frappe)
+R.check("elle est bien vue", obj.realActivityPending, true)
+
+R.section("Si le pid n'est pas renseigné, la marque prend le relais")
+ctl.pidLost = true
+ctl.markLost = false
+obj.processID = nil
+obj.currentState = obj.STATE.KEEPALIVE
+ctl.postedEvents = {}
+obj:postActivityKey()
+local notre3 = ctl.postedEvents[#ctl.postedEvents]
+ctl.now = ctl.now + 60
+obj.realActivityPending = false
+obj.lastFastReturnEventAt = 0
+tapPid.fn(notre3)
+R.check("reconnu par la marque", obj.realActivityPending, false)
+ctl.pidLost = false
+ctl.markLost = false
+
 R.finish()
