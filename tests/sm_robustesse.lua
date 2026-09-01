@@ -169,4 +169,68 @@ obj:startMainThreadWatch()
 R.check("désactivable : aucun timer", #ctl.everyTimers, 0)
 obj.mainThreadWatchEnabled = true
 
+
+------------------------------------------------------------
+R.section("Les requêtes d'accessibilité sont bornées")
+------------------------------------------------------------
+-- Une requête d'accessibilité est un aller-retour vers une AUTRE
+-- application. Si elle est occupée, l'appel bloque — et sans délai
+-- fixé, aussi longtemps qu'elle le décide. Pendant ce temps, aucune
+-- touche n'est transmise, puisqu'un eventtap fait passer chaque frappe
+-- par ce même thread.
+--
+-- Mesuré sur la machine, 57 applications : 2626 ms à froid, 19 ms en
+-- moyenne. Le cas normal coûte 0,3 ms par application ; le cas
+-- pathologique n'avait aucune borne.
+ctl.axTimeoutSet = nil
+ctl.axTimeoutFails = false
+obj.axTimeout = 0.25
+obj:applyAXTimeout()
+R.check("la borne est appliquée", ctl.axTimeoutSet, 0.25)
+
+ctl.printed = {}
+obj:applyAXTimeout()
+R.check("et elle est annoncée",
+    table.concat(ctl.printed, " "):find("bornees a 250 ms", 1, true) ~= nil, true)
+
+R.section("Un refus du système est dit, pas avalé")
+ctl.axTimeoutSet = nil
+ctl.axTimeoutFails = true
+ctl.printed = {}
+obj:applyAXTimeout()
+R.check("rien n'est appliqué", ctl.axTimeoutSet, nil)
+R.check("l'échec est journalisé",
+    table.concat(ctl.printed, " "):find("bloquer le clavier", 1, true) ~= nil, true)
+ctl.axTimeoutFails = false
+
+R.section("Réglable et désactivable")
+obj.axTimeout = 1.5
+obj:applyAXTimeout()
+R.check("valeur personnalisée", ctl.axTimeoutSet, 1.5)
+
+ctl.axTimeoutSet = nil
+obj.axTimeout = nil
+obj:applyAXTimeout()
+R.check("nil : on ne touche à rien", ctl.axTimeoutSet, nil)
+obj.axTimeout = -1
+obj:applyAXTimeout()
+R.check("négatif : on ne touche à rien non plus", ctl.axTimeoutSet, nil)
+obj.axTimeout = 0.25
+
+R.section("La borne est posée avant le démarrage des Spoons")
+-- Les Spoons interrogent l'accessibilité dès leur démarrage : poser la
+-- borne après les aurait laissés exposés pour leur première passe.
+ctl.axTimeoutSet = nil
+local ordre = {}
+local vraiApply = obj.applyAXTimeout
+local vraiStart = obj.startEnabledSpoons
+obj.applyAXTimeout = function(self) ordre[#ordre+1] = "borne"; return vraiApply(self) end
+obj.startEnabledSpoons = function(self) ordre[#ordre+1] = "spoons"; return self end
+obj:start()
+obj.applyAXTimeout = vraiApply
+obj.startEnabledSpoons = vraiStart
+R.check("la borne d'abord", ordre[1], "borne")
+R.check("les Spoons ensuite", ordre[2], "spoons")
+obj:stop()
+
 R.finish()

@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.15.0"
+obj.version = "1.16.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -128,6 +128,21 @@ obj.windowTransitionFullScanInterval = 30
 -- Au-dela, la cause n'est pas l'utilisateur qui ferme des fenetres
 -- mais un evenement systeme : le scan renonce au lieu de fermer.
 obj.maxSimultaneousScanQuits = 2
+
+-- Duree maximale d'un balayage, en secondes.
+--
+-- Chaque application interrogee est un aller-retour d'accessibilite,
+-- donc un appel vers un AUTRE processus. Mesure sur 57 applications :
+-- 19 ms en moyenne, mais 2626 ms quand les caches sont froids. Tout ce
+-- temps est pris sur le thread principal de Hammerspoon, celui-la meme
+-- qui livre les frappes et les clics : un balayage long fait perdre des
+-- touches.
+--
+-- SpoonManager borne deja chaque requete (axTimeout). Ceci borne leur
+-- SOMME : passe le budget, le balayage s'arrete et reprend au tick
+-- suivant. Les applications non visitees gardent leur comptage
+-- precedent, donc rien n'est perdu ni conclu a tort.
+obj.scanTimeBudget = 0.15
 
 -- Suspend la surveillance pendant la veille, le verrouillage et
 -- l'economiseur d'ecran. L'API d'accessibilite y devient muette et
@@ -2347,6 +2362,18 @@ function obj:scanWindowTransitions(initial)
     -- deja signalee par windowCreated.
     --------------------------------------------------------
 
+    local debutBalayage =
+        self:now()
+
+
+    local budget =
+        tonumber(self.scanTimeBudget) or 0
+
+
+    local interrompu =
+        false
+
+
     local now =
         self:now()
 
@@ -2368,6 +2395,20 @@ function obj:scanWindowTransitions(initial)
 
     for _, application in ipairs(hs.application.runningApplications()) do
 
+        -- Budget epuise : on ne touche plus a l'accessibilite. Les
+        -- applications restantes gardent leur comptage precedent, donc
+        -- aucune ne peut etre vue comme ayant perdu ses fenetres.
+
+        if not interrompu
+            and budget > 0
+            and (self:now() - debutBalayage) > budget then
+
+            interrompu =
+                true
+
+        end
+
+
         local appInfo =
             nil
 
@@ -2376,7 +2417,8 @@ function obj:scanWindowTransitions(initial)
             nil
 
 
-        if self:canHaveWindows(application) then
+        if not interrompu
+            and self:canHaveWindows(application) then
 
             appInfo =
                 self:appInfoFromApplication(application)
@@ -2465,6 +2507,37 @@ function obj:scanWindowTransitions(initial)
             end
 
         end
+
+    end
+
+
+    -- Ce qui n'a pas ete visite garde sa valeur : un balayage
+    -- interrompu ne doit rien effacer.
+
+    if interrompu then
+
+        for cle, valeur in pairs(previousCounts) do
+
+            if currentCounts[cle] == nil then
+
+                currentCounts[cle] =
+                    valeur
+
+            end
+
+        end
+
+
+        self:log(
+            string.format(
+                "Balayage interrompu apres %d ms (budget %d ms) :"
+                .. " l'accessibilite repond lentement. Le reste est"
+                .. " reporte au tick suivant.",
+                math.floor((self:now() - debutBalayage) * 1000),
+                math.floor(budget * 1000)
+            ),
+            true
+        )
 
     end
 

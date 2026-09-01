@@ -165,4 +165,61 @@ R.check("et alors Spotlight redevient candidate",
     obj:isAppBlacklisted({ name = "Spotlight", bundleID = "com.apple.Spotlight" }), false)
 obj.honourTransientWindowApps = true
 
+
+------------------------------------------------------------
+R.section("Un balayage lent rend la main au lieu de bloquer le clavier")
+------------------------------------------------------------
+-- Chaque application interrogée est un aller-retour d'accessibilité,
+-- donc un appel vers un AUTRE processus, sur le thread principal de
+-- Hammerspoon — celui-là même qui livre les frappes. Mesuré sur 57
+-- applications : 19 ms en moyenne, 2626 ms à froid. Un balayage long
+-- fait perdre des touches.
+fresh({"Edge","Firefox","Claude","Notes"})
+obj.scanTimeBudget = 0.15
+obj.windowCounts = { ["com.t.Edge"] = 1, ["com.t.Firefox"] = 1,
+                     ["com.t.Claude"] = 1, ["com.t.Notes"] = 1 }
+
+-- Chaque application coûte 0,1 s : le budget saute à la deuxième.
+local vraiCount = obj.countWindows
+obj.countWindows = function(self, app)
+    ctl.now = ctl.now + 0.1
+    return vraiCount(self, app)
+end
+ctl.printed = {}
+obj:scanWindowTransitions(true)
+obj.countWindows = vraiCount
+
+R.check("l'interruption est journalisée",
+    table.concat(ctl.printed, " "):find("Balayage interrompu", 1, true) ~= nil, true)
+R.check("aucune fermeture programmée", armed(), 0)
+
+-- Rien n'est perdu : les applications non visitées gardent leur compte.
+local connus = 0
+for _ in pairs(obj.windowCounts) do connus = connus + 1 end
+R.check("les quatre comptages sont conservés", connus, 4)
+R.check("y compris ceux qu'on n'a pas eu le temps de voir",
+    obj.windowCounts["com.t.Notes"], 1)
+
+R.section("Un balayage rapide n'est jamais interrompu")
+fresh({"Edge","Firefox"})
+obj.scanTimeBudget = 0.15
+ctl.printed = {}
+obj:scanWindowTransitions(true)
+R.check("aucune interruption",
+    table.concat(ctl.printed, " "):find("Balayage interrompu", 1, true) ~= nil, false)
+
+R.section("Budget désactivable")
+fresh({"Edge","Firefox","Claude","Notes"})
+obj.scanTimeBudget = 0
+obj.countWindows = function(self, app)
+    ctl.now = ctl.now + 0.5
+    return vraiCount(self, app)
+end
+ctl.printed = {}
+obj:scanWindowTransitions(true)
+obj.countWindows = vraiCount
+R.check("sans budget, le balayage va jusqu'au bout",
+    table.concat(ctl.printed, " "):find("Balayage interrompu", 1, true) ~= nil, false)
+obj.scanTimeBudget = 0.15
+
 R.finish()

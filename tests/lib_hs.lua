@@ -282,6 +282,15 @@ function M.install(opts)
             imageFromName = function(nm) return { _name = nm } end,
         },
         hash = { SHA256 = function(v) return ("%064x"):format(#tostring(v)) end },
+        -- ctl.axTimeoutSet retient la borne appliquee ;
+        -- ctl.axTimeoutFails simule un refus du systeme.
+        axuielement = { systemWideElement = function()
+            return { setTimeout = function(_, v)
+                if ctl.axTimeoutFails then return nil, "refus" end
+                ctl.axTimeoutSet = v
+                return true
+            end }
+        end },
         task = { new = function(cmd, cb, args)
             local t = { cmd = cmd, args = args, cb = cb, started = false }
             t.start = function() t.started = true; table.insert(ctl.tasks, t)
