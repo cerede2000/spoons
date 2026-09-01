@@ -398,4 +398,66 @@ R.check("donc la fenêtre reste entière et protège",
     obj:isSyntheticEventWindow(), true)
 ctl.markLost = false
 
+
+------------------------------------------------------------
+R.section("Nos touches de rétroéclairage ne sont pas l'utilisateur")
+------------------------------------------------------------
+-- Le keep-alive n'est pas notre seul événement. disableKeyboardBacklight
+-- et restoreKeyboardBacklight postent des touches système, et
+-- forceKeyboardBacklightOffAfterKeepAlive s'exécute à des instants sans
+-- rapport avec le dernier keep-alive. Toutes remettent à zéro l'horloge
+-- d'inactivité de macOS.
+--
+-- L'inférence comparait cette horloge au dernier KEEP-ALIVE. Une touche
+-- de rétroéclairage postée trente secondes plus tard remettait donc
+-- l'horloge à zéro alors que la référence datait de trente secondes :
+-- l'inférence concluait « quelqu'un d'autre a agi ». Puis l'inactivité
+-- remontait, on repassait au vert — surveillance, actif, surveillance,
+-- actif, sans que personne ne touche la machine.
+obj.currentState = obj.STATE.KEEPALIVE
+obj.keepaliveExitMargin = 2
+obj.keepaliveEnteredAt = 1000
+obj.lastKeepAliveTime = 1000
+obj.lastSyntheticAt = 1000
+
+-- Trente secondes plus tard, rien ne s'est passé.
+ctl.timeNow = 1030
+ctl.idle = 30
+R.check("rien à déduire", obj:realActivitySinceOurLastEvent(), false)
+
+-- Nous postons une touche système de rétroéclairage : macOS remet son
+-- horloge à zéro. Le dernier keep-alive, lui, remonte toujours à 30 s.
+obj:markSynthetic({ setProperty = function(e) return e end })
+ctl.idle = 0.2
+R.check("notre propre touche n'est pas l'utilisateur",
+    obj:realActivitySinceOurLastEvent(), false)
+
+-- Et un vrai retour reste vu, une fois passée la marge.
+ctl.timeNow = 1040
+ctl.idle = 0.5
+R.check("un vrai retour est toujours détecté",
+    obj:realActivitySinceOurLastEvent(), true)
+
+R.section("Chaque événement émis met la référence à jour")
+ctl.postedEvents = {}
+obj.lastSyntheticAt = nil
+obj.activityKey = "shift"
+ctl.timeNow = 2000
+obj:postActivityKey()
+R.check("la touche de keep-alive compte", obj.lastSyntheticAt, 2000)
+
+obj.lastSyntheticAt = nil
+ctl.timeNow = 2100
+obj:sendSystemKey("ILLUMINATION_DOWN")
+R.check("la touche système aussi", obj.lastSyntheticAt, 2100)
+
+obj.lastSyntheticAt = nil
+ctl.timeNow = 2200
+ctl.mouseClamped = false
+ctl.mousePosition = { x = 400, y = 300 }
+obj.isMouseEnabled = function() return true end
+obj:sendMouseActivity()
+R.check("le déplacement de souris aussi", obj.lastSyntheticAt, 2200)
+ctl.timeNow = nil
+
 R.finish()

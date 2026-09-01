@@ -146,7 +146,7 @@ obj.__index = obj
 
 obj.name = "ActivityKeeper"
 
-obj.version = "4.18.0"
+obj.version = "4.19.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -273,6 +273,26 @@ obj.syntheticMark = 0x414B0001
 -- mecanisme fonctionne sur cette machine. Tant qu'elle est fausse, la
 -- fenetre de grace reste entiere, par prudence.
 obj.syntheticMarkWorks = false
+
+-- Instant du DERNIER evenement que nous avons emis, quel qu'il soit.
+--
+-- Le keep-alive n'est pas notre seul evenement. disableKeyboardBacklight
+-- et restoreKeyboardBacklight postent des touches systeme, et
+-- forceKeyboardBacklightOffAfterKeepAlive s'execute a des instants sans
+-- rapport avec le dernier keep-alive. Toutes remettent a zero l'horloge
+-- d'inactivite de macOS.
+--
+-- L'inference de sortie du vert comparait cette horloge au dernier
+-- KEEP-ALIVE. Une touche de retroeclairage postee trente secondes plus
+-- tard remettait donc l'horloge a zero alors que la reference datait de
+-- trente secondes : l'inference concluait "quelqu'un d'autre a agi" et
+-- sortait du vert. Puis l'inactivite remontait, on repassait au vert, et
+-- ainsi de suite -- surveillance, actif, surveillance, actif, sans que
+-- personne ne touche la machine.
+--
+-- markSynthetic est le passage oblige de tout ce que nous emettons :
+-- c'est donc la que se note l'instant qui fait reference.
+obj.lastSyntheticAt = nil
 
 obj.syntheticEventGracePeriod = 1.0
 
@@ -1694,6 +1714,10 @@ function obj:markSynthetic(event)
     end
 
 
+    self.lastSyntheticAt =
+        os.time()
+
+
     pcall(function()
 
         event:setProperty(
@@ -1930,10 +1954,16 @@ function obj:realActivitySinceOurLastEvent()
     end
 
 
+    -- Le plus recent de nos propres instants : entree dans le vert,
+    -- dernier keep-alive, et dernier evenement emis quel qu'il soit.
+    -- Omettre le troisieme faisait prendre nos touches de
+    -- retroeclairage pour l'utilisateur.
+
     local reference =
         math.max(
             tonumber(self.lastKeepAliveTime) or 0,
-            tonumber(self.keepaliveEnteredAt) or 0
+            tonumber(self.keepaliveEnteredAt) or 0,
+            tonumber(self.lastSyntheticAt) or 0
         )
 
 
