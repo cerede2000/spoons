@@ -265,9 +265,40 @@ Deux choses, et elles n'ont besoin d'aucune API privee :
 
 ```lua
 spoon.LastWindowQuits.quitConfirmations = 3
+spoon.LastWindowQuits.quitConfirmationsAfterCloseEvent = 1
 spoon.LastWindowQuits.quitConfirmationSpacing = 2
+spoon.LastWindowQuits.closeEventTrustSeconds = 30
 spoon.LastWindowQuits.undecidableGraceSeconds = 60
 ```
+
+### L'exigence est proportionnelle a la preuve
+
+Deux situations qui ne se valent pas :
+
+| | preuve | confirmations |
+|---|---|---|
+| `Fenetre fermee` puis liste vide | on a **vu** la fenetre mourir | 1 |
+| liste vide, sans evenement | on le **deduit** d'un balayage | 3 |
+
+Les fermetures abusives -- Claude et Notes quittees pendant qu'une autre
+application etait en plein ecran -- venaient toutes du second cas.
+Exiger trois confirmations dans le premier ajoutait neuf secondes a un
+delai reglé a cinq :
+
+```
+21:06:23  Fenetre fermee : Ulysses
+21:06:23  indecidable, 1/3
+21:06:27  indecidable, 2/3            +4 s
+21:06:32  Quit programme dans 5 sec   +5 s
+21:06:37  Quit execute                +5 s      -> 14 s au total
+```
+
+La garde de la fenetre principale, elle, passe toujours avant : tant
+qu'une fenetre principale repond, aucun raccourci n'est permis, meme
+avec un evenement observe. C'est elle qui protegeait Claude.
+
+Passe `closeEventTrustSeconds`, un evenement ne dit plus rien de l'etat
+present et l'exigence complete revient.
 
 ### Une confirmation est un instant, pas un appel
 

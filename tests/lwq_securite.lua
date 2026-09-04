@@ -405,4 +405,113 @@ ctl.fireTimers()
 R.check("l'exclusion tient", #ctl.killed, 0)
 obj.blacklistBundleIDs = {}
 
+
+------------------------------------------------------------
+R.section("Exigence proportionnelle à la preuve")
+------------------------------------------------------------
+-- Deux situations qui ne se valent pas :
+--   « Fenetre fermee » puis liste vide  -> on a VU la fenêtre mourir
+--   liste vide sans événement           -> on le DÉDUIT d'un balayage
+--
+-- Les fermetures abusives — Claude et Notes quittées pendant qu'une
+-- autre application était en plein écran — venaient toutes du second
+-- cas. Exiger trois confirmations dans le premier ajoutait neuf
+-- secondes à un délai réglé à cinq.
+fresh({"Edge","Firefox"})
+obj.quitConfirmations = 3
+obj.quitConfirmationsAfterCloseEvent = 1
+obj.closeEventTrustSeconds = 30
+obj.closeEventAt = {}
+obj.seenApps = { ["com.t.Edge"] = true }
+obj.fullScanCursor = nil
+obj:scanWindowTransitions(true)
+
+local pidEdge = ctl.runningApps[1]:pid()
+ctl.runningApps[1]._windows = {}
+ctl.runningApps[1].mainWindow = function() return nil end
+
+-- Sans événement : la série complète reste exigée.
+obj.lastFullScanAt = ctl.now
+R.check("déduit : premier zéro indécidable",
+    obj:countWindows(ctl.runningApps[1]), nil)
+plusTard()
+R.check("deuxième aussi", obj:countWindows(ctl.runningApps[1]), nil)
+plusTard()
+R.check("il en faut bien trois", obj:countWindows(ctl.runningApps[1]), 0)
+
+-- Avec événement : une seule suffit.
+obj.zeroStreak = {}
+obj.zeroStreakAt = {}
+obj.undecidable = {}
+obj.undecidableSince = {}
+obj.closeEventAt[pidEdge] = ctl.now
+R.check("observé : le premier zéro conclut",
+    obj:countWindows(ctl.runningApps[1]), 0)
+
+R.section("Un vieil événement ne dit plus rien du présent")
+obj.zeroStreak = {}
+obj.zeroStreakAt = {}
+obj.undecidable = {}
+obj.undecidableSince = {}
+obj.closeEventAt[pidEdge] = ctl.now - 120     -- au-delà de la confiance
+R.check("la série complète revient",
+    obj:countWindows(ctl.runningApps[1]), nil)
+
+R.section("La garde de la fenêtre principale passe toujours avant")
+-- C'est elle qui protégeait Claude : tant qu'une fenêtre principale
+-- répond, aucun raccourci n'est permis, même avec un événement observé.
+obj.zeroStreak = {}
+obj.zeroStreakAt = {}
+obj.undecidable = {}
+obj.undecidableSince = {}
+obj.closeEventAt[pidEdge] = ctl.now
+ctl.runningApps[1].mainWindow = function() return lib.window({ id = 4242 }) end
+R.check("indécidable malgré l'événement",
+    obj:countWindows(ctl.runningApps[1]), nil)
+
+R.section("Le journal dit laquelle des deux règles s'applique")
+obj.zeroStreak = {}
+obj.zeroStreakAt = {}
+obj.undecidable = {}
+obj.undecidableSince = {}
+obj.quitConfirmationsAfterCloseEvent = 2
+ctl.runningApps[1].mainWindow = function() return nil end
+obj.closeEventAt[pidEdge] = ctl.now
+ctl.printed = {}
+obj:countWindows(ctl.runningApps[1])
+R.check("la preuve directe est signalée",
+    table.concat(ctl.printed, " "):find("fermeture observee", 1, true) ~= nil, true)
+obj.quitConfirmationsAfterCloseEvent = 1
+
+
+------------------------------------------------------------
+R.section("Bout en bout : fermeture vue, quit au délai réglé")
+------------------------------------------------------------
+-- Le scénario de l'utilisateur, chronométré. Avant : quatorze secondes,
+-- dont neuf de confirmations pour un délai réglé à cinq.
+fresh({"Edge","Firefox"})
+obj.quitDelay = 5
+obj.quitConfirmations = 3
+obj.quitConfirmationsAfterCloseEvent = 1
+obj.closeEventAt = {}
+obj.seenApps = { ["com.t.Edge"] = true }
+obj.fullScanCursor = nil
+obj:scanWindowTransitions(true)
+
+local depart = ctl.now
+ctl.runningApps[1]._windows = {}
+ctl.runningApps[1].mainWindow = function() return nil end
+ctl.timers = {}
+ctl.killed = {}
+
+-- L'événement de fermeture arrive, puis le recomptage qu'il programme.
+obj:onWindowDestroyed(W{ id = 7, app = ctl.runningApps[1] }, "Edge")
+ctl.fireOnly(obj.windowRemovalRecheckDelay)
+R.check("le quit est armé sans attendre les confirmations", armed(), 1)
+
+ctl.fireTimers()
+R.check("l'application est fermée", ctl.killed[1], "Edge")
+R.check("et le délai total est celui réglé",
+    ctl.now - depart <= obj.quitDelay + 1, true)
+
 R.finish()

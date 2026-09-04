@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.19.0"
+obj.version = "1.20.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -302,6 +302,31 @@ obj.seenApps =
 -- aveuglement de l'accessibilite dure quelques secondes, une fermeture
 -- reelle est definitive. On demande donc plusieurs zeros de suite.
 obj.quitConfirmations = 3
+
+-- Confirmations exigees quand la fermeture a ete VUE.
+--
+-- Les deux situations ne se valent pas :
+--
+--   "Fenetre fermee : Ulysses" puis liste vide
+--       -> on a vu la fenetre mourir. Trois signaux concordent :
+--          l'evenement, l'absence de fenetre principale, la liste vide.
+--
+--   liste vide, sans evenement
+--       -> on le DEDUIT d'un balayage. C'est de la que venaient les
+--          fermetures abusives : Claude et Notes quittees pendant qu'une
+--          autre application etait en plein ecran.
+--
+-- Exiger trois confirmations dans le premier cas ajoutait neuf secondes
+-- a un delai que l'utilisateur avait regle a cinq.
+obj.quitConfirmationsAfterCloseEvent = 1
+
+-- Duree pendant laquelle un evenement de fermeture reste probant. Au
+-- dela, l'exigence complete revient : un vieil evenement ne dit rien de
+-- l'etat present.
+obj.closeEventTrustSeconds = 30
+
+-- Instant du dernier evenement de fermeture observe, par processus.
+obj.closeEventAt = {}
 
 -- Ecart minimal entre deux confirmations, en secondes.
 --
@@ -1451,6 +1476,10 @@ function obj:forgetProcessState(pid)
         nil
 
 
+    self.closeEventAt[pid] =
+        nil
+
+
     return self
 
 end
@@ -1959,6 +1988,35 @@ function obj:undecidableStillTrusted(pid, nom)
 end
 
 
+-- Vrai si un evenement de fermeture a ete observe recemment pour ce
+-- processus. C'est la preuve directe qui autorise a conclure vite.
+
+function obj:closeEventStillTrusted(pid)
+
+    if not pid then
+
+        return false
+
+    end
+
+
+    local instant =
+        self.closeEventAt[pid]
+
+
+    if not instant then
+
+        return false
+
+    end
+
+
+    return (self:now() - instant)
+        <= (tonumber(self.closeEventTrustSeconds) or 30)
+
+end
+
+
 function obj:noteUndecidable(pid, nom, motif)
 
     if pid and not self.undecidableSince[pid] then
@@ -2200,8 +2258,20 @@ function obj:countWindows(application)
 
         if pid then
 
+            -- Exigence proportionnelle a la preuve.
+
+            local vu =
+                self:closeEventStillTrusted(pid)
+
+
             local requis =
-                math.max(1, tonumber(self.quitConfirmations) or 3)
+                math.max(
+                    1,
+                    tonumber(
+                        vu and self.quitConfirmationsAfterCloseEvent
+                            or self.quitConfirmations
+                    ) or 3
+                )
 
 
             local ecart =
@@ -2249,9 +2319,10 @@ function obj:countWindows(application)
                         pid,
                         nom,
                         string.format(
-                            "aucune fenetre vue, %d confirmation(s) sur %d",
+                            "aucune fenetre vue, %d confirmation(s) sur %d%s",
                             serie,
-                            requis
+                            requis,
+                            vu and " (fermeture observee)" or ""
                         )
                     )
 
@@ -3438,6 +3509,24 @@ function obj:onWindowRemoved(window, appName, eventLabel, quitReason)
 
 
     self:markSeen(appInfo)
+
+
+    -- La fermeture a ete VUE. Le comptage pourra conclure sans exiger
+    -- la serie complete de confirmations, qui n'existe que pour le cas
+    -- ou l'on deduit un zero sans avoir rien vu.
+
+    local pidFerme =
+        appInfo
+        and appInfo.app
+        and self:applicationPID(appInfo.app)
+
+
+    if pidFerme then
+
+        self.closeEventAt[pidFerme] =
+            self:now()
+
+    end
 
 
     -- Meme cause que dans scheduleQuit : plusieurs evenements pour une
@@ -5706,6 +5795,10 @@ function obj:stop()
 
 
     self.undecidableSince =
+        {}
+
+
+    self.closeEventAt =
         {}
 
 
