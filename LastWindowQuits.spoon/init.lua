@@ -33,7 +33,7 @@ obj.__index = obj
 
 obj.name = "LastWindowQuits"
 
-obj.version = "1.18.0"
+obj.version = "1.19.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -2404,6 +2404,20 @@ function obj:scanWindowTransitions(initial)
         false
 
 
+    -- Position ou reprendre le balayage complet. nil a la fin = tout a
+    -- ete vu.
+    local curseurSuivant =
+        nil
+
+
+    -- Une application du balayage complet a-t-elle deja ete traitee ce
+    -- tick. Garantit la progression : sans cela, les applications a
+    -- fenetres connues consomment tout le budget et le curseur pietine
+    -- indefiniment.
+    local completAvance =
+        false
+
+
     local now =
         self:now()
 
@@ -2420,9 +2434,15 @@ function obj:scanWindowTransitions(initial)
         hs.application.runningApplications()
 
 
-    -- Un balayage complet interrompu reprend ou il s'est arrete. Un
-    -- balayage partiel repart du debut : il ne visite qu'une poignee
-    -- d'applications, celles qui ont des fenetres connues.
+    -- Un balayage complet interrompu reprend ou il s'est arrete.
+    --
+    -- Mais le parcours repart TOUJOURS de la premiere application.
+    -- Celles situees avant le curseur sont traitees comme dans un
+    -- balayage partiel : on n'interroge que celles dont on connait deja
+    -- des fenetres. Ce sont les seules qui peuvent en perdre une
+    -- derniere, elles sont peu nombreuses, et les sauter revenait a
+    -- eteindre le filet pendant toute la duree d'un balayage etale --
+    -- c'est-a-dire a ne plus rien fermer.
 
     local depart =
         (fullScan and self.fullScanCursor) or 1
@@ -2436,30 +2456,60 @@ function obj:scanWindowTransitions(initial)
     end
 
 
-    for index = depart, #applications do
+    for index = 1, #applications do
 
         local application =
             applications[index]
+
+
+        -- Vrai quand cette application releve du balayage complet en
+        -- cours ; faux quand elle a deja ete vue par un tick precedent
+        -- du meme balayage.
+
+        local couvertParLeComplet =
+            fullScan
+            and index >= depart
 
 
         -- Budget epuise : on ne touche plus a l'accessibilite. Les
         -- applications restantes gardent leur comptage precedent, donc
         -- aucune ne peut etre vue comme ayant perdu ses fenetres.
 
-        if not interrompu
-            and budget > 0
-            and (self:now() - debutBalayage) > budget then
+        local depasse =
+            budget > 0
+            and (self:now() - debutBalayage) > budget
+
+
+        -- Sauf la premiere du balayage complet : un balayage etale doit
+        -- avancer d'au moins une application par tick.
+
+        local force =
+            couvertParLeComplet
+            and not completAvance
+
+
+        local ignoree =
+            depasse and not force
+
+
+        if ignoree then
 
             interrompu =
                 true
 
 
-            if fullScan then
+            if couvertParLeComplet
+                and curseurSuivant == nil then
 
-                self.fullScanCursor =
+                curseurSuivant =
                     index
 
             end
+
+        elseif couvertParLeComplet then
+
+            completAvance =
+                true
 
         end
 
@@ -2472,7 +2522,7 @@ function obj:scanWindowTransitions(initial)
             nil
 
 
-        if not interrompu
+        if not ignoree
             and self:canHaveWindows(application) then
 
             appInfo =
@@ -2511,7 +2561,7 @@ function obj:scanWindowTransitions(initial)
             -- reference sans payer la requete AX.
             --------------------------------------------------
 
-            if not fullScan
+            if not couvertParLeComplet
                 and (previous == nil or previous == 0) then
 
                 currentCounts[key] =
@@ -2566,16 +2616,20 @@ function obj:scanWindowTransitions(initial)
     end
 
 
-    if fullScan and not interrompu then
-
-        -- Tout le monde a ete vu : la reference est complete.
+    if fullScan then
 
         self.fullScanCursor =
-            nil
+            curseurSuivant
 
 
-        self.lastFullScanAt =
-            now
+        if curseurSuivant == nil then
+
+            -- Tout le monde a ete vu : la reference est complete.
+
+            self.lastFullScanAt =
+                now
+
+        end
 
     end
 

@@ -21,7 +21,7 @@ obj.__index = obj
 
 obj.name = "SpoonManager"
 
-obj.version = "2.3.0"
+obj.version = "2.4.0"
 
 obj.author = "Benjamin Cerede / OpenAI"
 
@@ -1154,21 +1154,26 @@ end
 -- seul endroit ou cette borne a sa place : le pivot.
 ------------------------------------------------------------
 
--- 250 ms ne suffisaient pas. Journal de l'utilisateur :
+-- Cette borne existe pour empecher un BLOCAGE, pas pour ecourter du
+-- travail legitime.
 --
---   Balayage complet interrompu apres 552 ms (budget 150 ms).
---   Reprise au tick suivant a partir de l'application 65.
+-- Elle a ete descendue a 100 ms pour reduire le depassement du budget
+-- de balayage. C'etait une erreur de raisonnement : interroger une
+-- application, c'est demander sa liste de fenetres puis un identifiant
+-- par fenetre. Une application chargee depasse largement 100 ms
+-- honnetement, et la requete expirait alors au milieu -- rendant une
+-- liste vide pour une application qui a des fenetres.
 --
--- Le budget est verifie AVANT chaque application, donc le depassement
--- vaut le cout d'une seule -- ici 400 ms. Une application interrogee,
--- c'est plusieurs requetes d'accessibilite : la liste de ses fenetres,
--- puis un identifiant par fenetre. Le plafond par requete doit donc
--- etre nettement plus bas que le budget d'un balayage.
+-- LastWindowQuits lit une liste vide comme "plus aucune fenetre". Ses
+-- gardes -- la fenetre principale, puis trois confirmations espacees --
+-- l'empechent de conclure tout de suite, mais au bout de
+-- undecidableGraceSeconds la liste fait foi. Une borne trop courte
+-- pouvait donc lui faire fermer une application qui avait des fenetres.
 --
--- Le cas normal coute 0,3 ms par application. A 100 ms par requete, la
--- marge reste de deux ordres de grandeur, et une application muette ne
--- peut plus a elle seule tripler la duree d'un balayage.
-obj.axTimeout = 0.10
+-- Une seconde ne coupe rien de legitime et borne toujours un vrai
+-- blocage. Le depassement du budget se traite du cote du balayage, en
+-- l'etalant -- pas en mutilant les mesures.
+obj.axTimeout = 1.0
 
 
 function obj:applyAXTimeout()

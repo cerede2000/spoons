@@ -313,4 +313,96 @@ obj.windowTransitionFallbackEnabled = true
 
 R.check("un seul balayage suffit désormais", avecFilet > 0, true)
 
+
+------------------------------------------------------------
+R.section("Le filet n'est jamais affamé par un balayage étalé")
+------------------------------------------------------------
+-- Le parcours repartait du curseur. Pendant qu'un balayage complet
+-- s'étalait sur plusieurs ticks, les applications situées AVANT le
+-- curseur n'étaient plus visitées du tout — y compris celles qui ont
+-- des fenêtres connues, c'est-à-dire exactement celles qui peuvent en
+-- perdre une dernière. Le filet était éteint, et plus rien ne se
+-- fermait.
+fresh({"Edge","Firefox","Claude","Notes"})
+obj.scanTimeBudget = 0.15
+obj.fullScanCursor = 3          -- un balayage complet est en cours
+obj.windowCounts = { ["com.t.Edge"] = 1, ["com.t.Firefox"] = 1,
+                     ["com.t.Claude"] = 1, ["com.t.Notes"] = 1 }
+obj.seenApps = { ["com.t.Edge"] = true }
+
+ctl.runningApps[1]._windows = {}          -- Edge, en 1re position, perd tout
+for _ = 1, obj.quitConfirmations do
+    obj:scanWindowTransitions(false)
+    plusTard()
+end
+ctl.fireTimers()
+R.check("Edge est fermée malgré le curseur en position 3", #ctl.killed, 1)
+R.check("la bonne", ctl.killed[1], "Edge")
+
+R.section("Un balayage étalé progresse toujours d'au moins une application")
+-- Sans cette garantie, les applications à fenêtres connues consomment
+-- tout le budget et le curseur piétine indéfiniment : la référence ne
+-- se complète jamais.
+fresh({"Edge","Firefox","Claude","Notes"})
+obj.scanTimeBudget = 0.15
+obj.fullScanCursor = nil
+obj.windowCounts = {}
+local vraiCount2 = obj.countWindows
+obj.countWindows = function(self, app)
+    ctl.now = ctl.now + 0.2       -- chaque application dépasse le budget
+    return vraiCount2(self, app)
+end
+local positions = {}
+local tours2 = 0
+repeat
+    obj:scanWindowTransitions(tours2 == 0)
+    positions[#positions + 1] = obj.fullScanCursor
+    tours2 = tours2 + 1
+until obj.fullScanCursor == nil or tours2 > 12
+obj.countWindows = vraiCount2
+
+R.check("le curseur finit par se libérer", obj.fullScanCursor, nil)
+R.check("il n'a jamais piétiné", tours2 <= 6, true)
+local connus2 = 0
+for _ in pairs(obj.windowCounts) do connus2 = connus2 + 1 end
+R.check("et la référence est complète", connus2, 4)
+
+R.section("Le cas nominal : fermeture de la dernière fenêtre, quit après le délai")
+-- C'est le but du Spoon, testé de bout en bout dans les conditions de
+-- l'utilisateur : délai de 5 s, exclusions respectées.
+fresh({"Edge","Firefox"})
+obj.quitDelay = 5
+obj.scanTimeBudget = 0.15
+obj.fullScanCursor = nil
+obj.seenApps = { ["com.t.Edge"] = true }
+obj:scanWindowTransitions(true)
+R.check("référence établie", obj.windowCounts["com.t.Edge"], 1)
+
+ctl.runningApps[1]._windows = {}
+obj.lastFullScanAt = ctl.now
+for _ = 1, obj.quitConfirmations do
+    obj:scanWindowTransitions(false)
+    plusTard()
+end
+R.check("un quit est armé", armed(), 1)
+R.check("rien n'est encore fermé", #ctl.killed, 0)
+ctl.fireTimers()
+R.check("puis l'application est fermée", ctl.killed[1], "Edge")
+
+R.section("Une application exclue n'est jamais fermée")
+fresh({"Edge","Firefox"})
+obj.blacklistBundleIDs = { ["com.t.Edge"] = true }
+obj.seenApps = { ["com.t.Edge"] = true }
+obj.fullScanCursor = nil
+obj:scanWindowTransitions(true)
+ctl.runningApps[1]._windows = {}
+obj.lastFullScanAt = ctl.now
+for _ = 1, obj.quitConfirmations do
+    obj:scanWindowTransitions(false)
+    plusTard()
+end
+ctl.fireTimers()
+R.check("l'exclusion tient", #ctl.killed, 0)
+obj.blacklistBundleIDs = {}
+
 R.finish()

@@ -232,6 +232,18 @@ Un balayage partiel, lui, s'interrompt sans reprise : il n'interroge que
 les applications ayant deja des fenetres connues, et le tick suivant les
 reverra de toute facon.
 
+**Le parcours repart toujours de la premiere application.** Celles
+situees avant le curseur sont traitees comme dans un balayage partiel :
+seules celles dont on connait deja des fenetres sont interrogees. Une
+version repartait du curseur -- et pendant qu'un balayage s'etalait, les
+applications situees avant lui n'etaient plus visitees du tout, y
+compris celles qui pouvaient perdre leur derniere fenetre. Le filet
+etait eteint, et plus rien ne se fermait.
+
+Un balayage etale progresse d'au moins une application par tick, meme
+quand le budget est deja depense : sans cette garantie, les applications
+a fenetres connues le consomment entierement et le curseur pietine.
+
 Le demarrage ne balaie qu'une fois. `primeSeenApps` et le balayage
 initial interrogeaient tous deux l'ensemble des applications, et
 appelaient `markSeen` dans exactement les memes cas : cinq secondes de
